@@ -890,7 +890,7 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
             <button
               onClick={onOpenMOPHUpdater}
               className="text-xs border border-teal-300 dark:border-teal-700/60 px-2.5 py-1 bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/50 rounded cursor-pointer font-medium text-teal-700 dark:text-teal-300 flex items-center gap-1.5 transition-colors shadow-2xs"
-              title="Update prices directly from MOPH MediTrack database"
+              title="Update prices directly from the official MOPH price list"
             >
               <Globe className="h-3.5 w-3.5" />
               Update from MOPH

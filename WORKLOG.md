@@ -118,3 +118,45 @@ granular product-array mutations, and the alert-check effect — these are safe 
   - Fixed form reset logic across all three instances (`handleAddItemToInvoice`, `handleOpenCreate`, `handleEditPurchase`) to reset these fields to `'0'`.
   - Fixed fallback parsing in `handleAddItemToInvoice` so that a user entry of `'0'` correctly yields `0`, instead of falling back to a default value (e.g. `1` or `5.00`) due to javascript `||` falsy checks.
 - Verified: `npm run lint` and `npm run build` GREEN.
+## What was completed in THIS session (dropped MediTrack — NOT committed)
+- **Request**: drop all use of `meditrack.moph.gov.lb`; rely only on `moph.gov.lb` for "Update from MOPH".
+- **Server** (`server.ts`): removed `/api/moph/authenticate` and `/api/moph/price-catalog` routes, the
+  `MOPH_API_BASE` constant, and the MediTrack comment block. The price-list XLS scraping
+  (`/api/moph/price-list` → `moph.gov.lb/en/Pages/3/3101/drugs-public-price-list-`) and LNDD ingredient
+  lookup (`www.moph.gov.lb/en/Drugs/index/3/4848`) are unchanged and already moph.gov.lb only.
+- **Client** (`src/services/mophApiService.ts`): removed `MOPHPriceRecord`, `MOPHAuthResult`,
+  `authenticateMOPH`, `fetchMOPHPriceCatalog`, `matchMedicationsToProducts`. Kept `fetchMOPHPriceList`
+  + `fetchMOPHLNDDIngredients`.
+- **Modal** (`MOPHPriceUpdaterModal.tsx`): credential/login step replaced with a credential-free start
+  screen. `handleFetch` now fetches the official price list once, partitions rows into
+  matched-in-stock vs importable, and builds matched items (price/margin/agent/name/strength/form)
+  straight from the XLS rows — same fields the MediTrack catalog used to provide. Removed username/
+  password/save-username state, `Eye/EyeOff/Lock` icons, and the `mophData` catalog record. Re-fetch
+  buttons now re-run `handleFetch`.
+- **StockView.tsx**: button tooltip now reads "official MOPH price list" instead of "MOPH MediTrack".
+- Trade-offs accepted: lose GTIN barcode + prescription flags (never used by the feature) and the
+  unmarketed-catalog fallback in imports; stock codes present only in the catalog (not in the marketed
+  XLS) no longer match.
+- **NEW — password lock on "Update from MOPH"**: the modal now opens on a `locked` step. The password is
+  a top-of-file constant `MOPH_UPDATE_PASSWORD = 'pharma2026'` in `MOPHPriceUpdaterModal.tsx` (the value
+  the owner edits to set their own password). Wrong password → inline error; correct → proceed to
+  `start`. Stepper is hidden while locked. Includes show/hide toggle and Enter-to-submit via `<form>`.
+  NOTE: the constant ships in the renderer bundle, so this is a deterrent/soft lock, not real security —
+  anyone with the exe can read it from the JS. Not stored anywhere else.
+- **NEW — 1-year unlock**: first successful password entry writes `moph_unlock_expires_at` (expiry =
+  now + 365d) to localStorage. Modal opens straight to `start` while a future expiry exists (no password
+  prompt for 1 year). After expiry, the key is cleared on mount and the lock screen returns; re-entering
+  the password starts a fresh 1-year window. Start screen shows "Unlocked — password won't be asked
+  again until <date>". Per-PC (localStorage), and a fresh-data wipe (build policy) resets it.
+- **NEW — online time for the unlock (no OS clock)**: the PC's local clock is never trusted. Server
+  exposes `GET /api/moph/now` → current time fetched from public HTTPS hosts (moph.gov.lb `Date` header,
+  fallback cloudflare `/cdn-cgi/trace` `ts=`), cached 60s, `trusted` flag. The modal opens at a
+  `checking` step and verifies `moph_unlock_expires_at` against that online timestamp; `handleUnlock`
+  also stamps the 1-year window from online time. Fails CLOSED: if no online source is reachable the
+  feature stays locked with a "could not verify current time online" message.
+- Verified: `npm run lint` GREEN after the 1-year unlock change (HMR clean); after the online-time change
+  `npm run lint`/`test`/`build` all GREEN (server restarted — `/api/moph/now` returns trusted online
+  time: unixMs=1788995671000 → 09/10/2026 02:14).
+- Verified: `npm run lint` GREEN after the lock change (dev server hot-reloaded the modal cleanly).
+- Verified: `npm run lint`, `npm run test` (8), `npm run build` all GREEN. No `meditrack` references
+  remain in the repo.

@@ -228,90 +228,6 @@ Return ONLY valid JSON matching this schema:
   }
 });
 
-// ── MOPH MediTrack API Proxy ──────────────────────────────────────────────
-// Proxies requests to the Lebanese Ministry of Public Health MediTrack API
-// to avoid CORS issues from the Electron renderer process.
-//
-// Verified live endpoints (2026):
-//   Token:  POST https://meditrack.moph.gov.lb/api/token
-//           (form-encoded: grant_type=password&username=...&password=...)
-//   Prices: POST https://meditrack.moph.gov.lb/api/api/MOH/GetMedicationPriceInfo
-//           (Bearer token + JSON {} body) -> full catalog w/ PublicPrice
-
-const MOPH_API_BASE = 'https://meditrack.moph.gov.lb';
-
-// Authenticate with MediTrack and return OAuth2 bearer token
-app.post('/api/moph/authenticate', async (req, res) => {
-  try {
-    const { username, password } = req.body || {};
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-
-    const params = new URLSearchParams();
-    params.append('grant_type', 'password');
-    params.append('username', username);
-    params.append('password', password);
-
-    const response = await fetch(`${MOPH_API_BASE}/api/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString(),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      return res.status(response.status).json({
-        error: `Authentication failed (${response.status})`,
-        details: errorText,
-      });
-    }
-
-    const data = await response.json();
-    return res.json({
-      accessToken: data.access_token,
-      tokenType: data.token_type,
-      expiresIn: data.expires_in,
-    });
-  } catch (err: any) {
-    console.error('MOPH authentication error:', err?.message || err);
-    return res.status(500).json({ error: err?.message || 'Failed to connect to MOPH API' });
-  }
-});
-
-// Fetch the full medication + public price catalog from MediTrack
-app.post('/api/moph/price-catalog', async (req, res) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) {
-      return res.status(401).json({ error: 'Missing authorization token' });
-    }
-
-    const response = await fetch(`${MOPH_API_BASE}/api/api/MOH/GetMedicationPriceInfo`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(req.body || {}),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      return res.status(response.status).json({
-        error: `Failed to fetch price catalog (${response.status})`,
-        details: errorText,
-      });
-    }
-
-    const data = await response.json();
-    return res.json(data);
-  } catch (err: any) {
-    console.error('MOPH price catalog fetch error:', err?.message || err);
-    return res.status(500).json({ error: err?.message || 'Failed to fetch price catalog from MOPH' });
-  }
-});
-
 // ---------------------------------------------------------------------------
 // MOPH price list (.xls) scraping + LNDD ingredients lookup
 //
@@ -409,6 +325,66 @@ app.get('/api/moph/price-list', async (req, res) => {
   } catch (err: any) {
     console.error('MOPH price list error:', err?.message || err);
     return res.status(500).json({ error: err?.message || 'Failed to fetch MOPH public price list' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Trusted online time (for the "Update from MOPH" 1-year unlock).
+//
+// The unlock expiry must NOT be decided from the PC's local clock (a user could
+// backdate it to re-enable the feature). Instead, the server reads the current
+// time from public HTTPS hosts (Date header / cloudflare trace) and returns it
+// to the renderer. Fails closed: if no source is reachable, the client treats
+// the feature as locked. Result is cached for 60s.
+// ---------------------------------------------------------------------------
+const TRUSTED_TIME_SOURCES = [
+  'https://moph.gov.lb/',                       // same trusted host the price list comes from
+  'https://www.cloudflare.com/cdn-cgi/trace',   // tiny text; contains ts=<unix seconds>
+];
+
+let trustedTimeCache: { ts: number; unixMs: number } | null = null;
+
+async function fetchTrustedTime(): Promise<number> {
+  for (const url of TRUSTED_TIME_SOURCES) {
+    try {
+      const isCloudflare = url.includes('cdn-cgi/trace');
+      const resp = await fetch(url, {
+        method: isCloudflare ? 'GET' : 'HEAD',
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!resp.ok) continue;
+
+      if (isCloudflare) {
+        const text = await resp.text();
+        const match = /^ts=(\d+)$/m.exec(text);
+        if (match) return Number(match[1]) * 1000;
+        continue;
+      }
+
+      const date = resp.headers.get('date');
+      if (date) {
+        const unixMs = Date.parse(date);
+        if (Number.isFinite(unixMs)) return unixMs;
+      }
+    } catch (e) {
+      console.warn(`Trusted time source failed (${url}):`, (e as Error)?.message || e);
+    }
+  }
+  throw new Error('No trusted time source reachable');
+}
+
+app.get('/api/moph/now', async (req, res) => {
+  try {
+    if (trustedTimeCache && Date.now() - trustedTimeCache.ts < 60 * 1000) {
+      return res.json({ unixMs: trustedTimeCache.unixMs, trusted: true, source: 'cache' });
+    }
+    const unixMs = await fetchTrustedTime();
+    trustedTimeCache = { ts: Date.now(), unixMs };
+    return res.json({ unixMs, trusted: true, source: 'online' });
+  } catch (err: any) {
+    console.error('MOPH trusted time error:', err?.message || err);
+    return res.status(502).json({ error: 'Could not verify the current time online', trusted: false });
   }
 });
 

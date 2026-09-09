@@ -2,6 +2,9 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import {
   Globe,
   Lock,
+  Unlock,
+  Eye,
+  EyeOff,
   Check,
   X,
   Search,
@@ -14,8 +17,6 @@ import {
   ChevronUp,
   Database,
   RefreshCw,
-  Eye,
-  EyeOff,
   PlusCircle,
   Layers,
 } from 'lucide-react';
@@ -23,13 +24,9 @@ import { usePharmacy } from '../../context/PharmacyContext';
 import { DesktopWindow } from '../common/DesktopWindow';
 import type { Product } from '../../types/pharmacy';
 import {
-  authenticateMOPH,
-  fetchMOPHPriceCatalog,
   fetchMOPHPriceList,
   fetchMOPHLNDDIngredients,
-  matchMedicationsToProducts,
-  type MOPHPriceRecord,
-  type MOPHPriceListRow,
+  fetchMOPHNow,
 } from '../../services/mophApiService';
 import { formatLBPValue } from '../../utils/priceUtils';
 
@@ -38,10 +35,9 @@ interface MOPHPriceUpdaterModalProps {
   section?: string;
 }
 
-type Step = 'credentials' | 'fetching' | 'preview' | 'applying' | 'done';
+type Step = 'locked' | 'checking' | 'start' | 'fetching' | 'preview' | 'applying' | 'done';
 
 interface MatchedItem {
-  mophData: MOPHPriceRecord;
   productId: string;
   productCode: string;
   currentPriceLBP: number;
@@ -52,11 +48,13 @@ interface MatchedItem {
   currentAgent: string;
   mophMargin: number | null;
   currentMargin: number;
+  name: string;
+  strength: string;
+  form: string;
   selected: boolean;
 }
 
 interface NewImportItem {
-  mophData?: MOPHPriceRecord;
   code: string;
   name: string;
   strength: string;
@@ -72,19 +70,68 @@ interface NewImportItem {
 
 type PreviewTab = 'matched' | 'import-items';
 
-const STORAGE_KEY_MOPH_USER = 'moph_saved_username';
-
 // LNDD ingredients come from public POSTs (slow); never blast thousands at once.
 const MAX_INGREDIENTS_BATCH = 100;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lock for the "Update from MOPH" feature.
+// The password is checked locally in the app — change the value below to set
+// your own password (e.g. MOPH_UPDATE_PASSWORD = 'mySecret123';).
+// The first successful unlock activates the feature for one year (persisted in
+// localStorage). The client's PC clock is NEVER trusted: the current time is
+// fetched online via GET /api/moph/now (server reads Date headers from public
+// HTTPS hosts) both to verify an existing unlock and to stamp the 1-year window.
+// If online time is unreachable the feature fails closed and stays locked.
+// ─────────────────────────────────────────────────────────────────────────────
+const MOPH_UPDATE_PASSWORD = 'pharma2026';
+const MOPH_UNLOCK_STORAGE_KEY = 'moph_unlock_expires_at';
+const MOPH_UNLOCK_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
+
+function mophUnlockExpiryDate(): Date | null {
+  try {
+    const raw = localStorage.getItem(MOPH_UNLOCK_STORAGE_KEY);
+    if (!raw) return null;
+    const exp = Number(raw);
+    if (!Number.isFinite(exp) || exp <= Date.now()) return null;
+    return new Date(exp);
+  } catch {
+    return null;
+  }
+}
 
 export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ onClose, section }) => {
   const { products, exchangeRate, updateProduct, importProductsFromCSV } = usePharmacy();
 
-  const [step, setStep] = useState<Step>('credentials');
-  const [username, setUsername] = useState(() => localStorage.getItem(STORAGE_KEY_MOPH_USER) || '');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [saveUsername, setSaveUsername] = useState(() => Boolean(localStorage.getItem(STORAGE_KEY_MOPH_USER)));
+  const [step, setStep] = useState<Step>('checking');
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [showUnlockPassword, setShowUnlockPassword] = useState(false);
+  const [unlockError, setUnlockError] = useState('');
+
+  // Verify the unlock status against online time (never the PC's clock): if a
+  // stored future expiry exists the modal opens unlocked; otherwise it locks and
+  // the stale key (if any) is cleared. Fails closed when no online time source
+  // is reachable.
+  const checkUnlock = useCallback(async () => {
+    try {
+      const now = await fetchMOPHNow();
+      if (!now.trusted || !(now.unixMs > 0)) throw new Error('Online time is untrusted');
+      const raw = localStorage.getItem(MOPH_UNLOCK_STORAGE_KEY);
+      const exp = Number(raw);
+      if (raw && Number.isFinite(exp) && exp > now.unixMs) {
+        setStep('start');
+      } else {
+        try { localStorage.removeItem(MOPH_UNLOCK_STORAGE_KEY); } catch { /* ignore */ }
+        setStep('locked');
+      }
+    } catch {
+      setUnlockError('Could not verify the current time online. Make sure you are connected to the internet and try again.');
+      setStep('locked');
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkUnlock();
+  }, [checkUnlock]);
 
   const [fetchProgress, setFetchProgress] = useState({ count: 0, batch: 0, phase: '' });
   const [fetchError, setFetchError] = useState('');
@@ -111,120 +158,93 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
     return map;
   }, [products]);
 
-  const handleAuthenticate = useCallback(async () => {
-    if (!username.trim() || !password.trim()) return;
+  const unlockExpiry = useMemo(() => mophUnlockExpiryDate(), [step]);
 
+  const handleUnlock = useCallback(async () => {
+    if (unlockPassword !== MOPH_UPDATE_PASSWORD) {
+      setUnlockError('Incorrect password. Please try again.');
+      return;
+    }
+
+    setUnlockError('');
+    try {
+      // Stamp the 1-year window from trusted online time, not the PC's clock.
+      const now = await fetchMOPHNow();
+      if (!now.trusted || !(now.unixMs > 0)) throw new Error('Online time is untrusted');
+      try {
+        localStorage.setItem(MOPH_UNLOCK_STORAGE_KEY, String(now.unixMs + MOPH_UNLOCK_DURATION_MS));
+      } catch { /* ignore */ }
+      setUnlockPassword('');
+      setStep('start');
+    } catch {
+      setUnlockError('Could not verify the current time online. Make sure you are connected to the internet and try again.');
+    }
+  }, [unlockPassword]);
+
+  const handleFetch = useCallback(async () => {
     setFetchError('');
     setStep('fetching');
-    setFetchProgress({ count: 0, batch: 0, phase: 'Authenticating with MOPH...' });
+    setFetchProgress({ count: 0, batch: 0, phase: 'Fetching official price list & margins from MOPH...' });
 
     try {
-      if (saveUsername) {
-        localStorage.setItem(STORAGE_KEY_MOPH_USER, username.trim());
-      } else {
-        localStorage.removeItem(STORAGE_KEY_MOPH_USER);
+      const priceList = await fetchMOPHPriceList();
+
+      setTotalMophMedications(priceList.length);
+      setFetchProgress({ count: priceList.length, batch: 0, phase: 'Matching with your stock items...' });
+
+      const items: MatchedItem[] = [];
+      const imports: NewImportItem[] = [];
+
+      for (const r of priceList) {
+        if (r.code == null) continue;
+        const key = String(r.code).toUpperCase();
+        const prod = productCodeMap.get(key);
+
+        if (prod) {
+          const mophPriceLBP = r.publicPriceLBP || 0;
+          const mophPriceUSD = mophPriceLBP > 0 ? Number((mophPriceLBP / exchangeRate).toFixed(2)) : 0;
+          items.push({
+            productId: prod.id,
+            productCode: prod.code,
+            currentPriceLBP: prod.priceLBP,
+            currentPriceUSD: prod.priceUSD,
+            mophPriceLBP,
+            mophPriceUSD,
+            mophAgent: r.agent || '',
+            currentAgent: products.find(p => p.id === prod.id)?.agent || '',
+            mophMargin: r.pharmacistMargin ?? null,
+            currentMargin: products.find(p => p.id === prod.id)?.pharmacistMarginProfit ?? 0,
+            name: r.brandName || '',
+            strength: r.strength || '',
+            form: r.form || '',
+            selected: (mophPriceLBP > 0 && mophPriceLBP !== prod.priceLBP),
+          });
+        } else {
+          const priceLBP = r.publicPriceLBP || 0;
+          imports.push({
+            code: String(r.code),
+            name: r.brandName || '',
+            strength: r.strength || '',
+            presentation: r.presentation || '',
+            form: r.form || '',
+            priceLBP,
+            priceUSD: priceLBP > 0 ? Number((priceLBP / exchangeRate).toFixed(2)) : 0,
+            agent: r.agent || '',
+            margin: r.pharmacistMargin,
+            ingredients: '',
+            selected: false,
+          });
+        }
       }
-
-      const auth = await authenticateMOPH(username.trim(), password);
-
-      setFetchProgress({ count: 0, batch: 0, phase: 'Fetching medication database from MOPH...' });
-
-      const records = await fetchMOPHPriceCatalog(auth.accessToken);
-
-      setTotalMophMedications(records.length);
-      setFetchProgress({ count: records.length, batch: 0, phase: 'Fetching official price list & margins...' });
-
-      let marginByCode = new Map<string, number>();
-      let priceList: MOPHPriceListRow[] = [];
-      try {
-        priceList = await fetchMOPHPriceList();
-        marginByCode = new Map(
-          priceList
-            .filter(r => r.pharmacistMargin != null && r.code != null)
-            .map(r => [String(r.code).toUpperCase(), r.pharmacistMargin as number])
-        );
-      } catch (e) {
-        console.warn('Price list (margin) fetch failed, continuing without margins:', e);
-      }
-
-      setFetchProgress({ count: records.length, batch: 0, phase: 'Matching with your stock items...' });
-
-      const matches = matchMedicationsToProducts(records, productCodeMap);
-
-      const matchedSet = new Set<string>();
-      const items: MatchedItem[] = matches.map(m => {
-        matchedSet.add(m.productCode);
-        const prod = productCodeMap.get(m.productCode)!;
-        const mophPriceLBP = m.mophData.PublicPrice || 0;
-        const mophPriceUSD = mophPriceLBP > 0 ? Number((mophPriceLBP / exchangeRate).toFixed(2)) : 0;
-
-        return {
-          mophData: m.mophData,
-          productId: m.productId,
-          productCode: m.productCode,
-          currentPriceLBP: prod.priceLBP,
-          currentPriceUSD: prod.priceUSD,
-          mophPriceLBP,
-          mophPriceUSD,
-          mophAgent: m.mophData.Agent || '',
-          currentAgent: products.find(p => p.id === m.productId)?.agent || '',
-          mophMargin: marginByCode.get(m.productCode.toUpperCase()) ?? null,
-          currentMargin: products.find(p => p.id === m.productId)?.pharmacistMarginProfit ?? 0,
-          selected: (mophPriceLBP > 0 && mophPriceLBP !== prod.priceLBP),
-        };
-      });
-
-      const imports: NewImportItem[] = (priceList.length > 0
-        // Official marketed-drug price list: one row per real, purchasable drug.
-        // The MediTrack catalog (10k+) also contains registered-but-unmarketed
-        // drugs, so it would massively overstate "drugs to import".
-        ? priceList
-            .filter(r => r.code != null && !productCodeMap.has(String(r.code).toUpperCase()))
-            .map(r => {
-              const key = String(r.code).toUpperCase();
-              const catRec = records.find(rec => String(rec.MOHCode).toUpperCase() === key);
-              const priceLBP = r.publicPriceLBP ?? catRec?.PublicPrice ?? 0;
-              return {
-                mophData: catRec,
-                code: String(r.code),
-                name: r.brandName || catRec?.BrandName || '',
-                strength: r.strength || catRec?.Strength || '',
-                presentation: r.presentation || catRec?.Presentation || '',
-                form: r.form || catRec?.Form || '',
-                priceLBP,
-                priceUSD: priceLBP > 0 ? Number((priceLBP / exchangeRate).toFixed(2)) : 0,
-                agent: r.agent || catRec?.Agent || '',
-                margin: r.pharmacistMargin,
-                ingredients: '',
-                selected: false,
-              } as NewImportItem;
-            })
-        // Fallback if the price list is unreachable: keep the catalog-based list.
-        : records
-            .filter(rec => rec.MOHCode && !productCodeMap.has(rec.MOHCode.toUpperCase()))
-            .map(rec => ({
-              mophData: rec,
-              code: rec.MOHCode,
-              name: rec.BrandName || '',
-              strength: rec.Strength || '',
-              presentation: rec.Presentation || '',
-              form: rec.Form || '',
-              priceLBP: rec.PublicPrice || 0,
-              priceUSD: rec.PublicPrice > 0 ? Number((rec.PublicPrice / exchangeRate).toFixed(2)) : 0,
-              agent: rec.Agent || '',
-              margin: marginByCode.get(String(rec.MOHCode).toUpperCase()) ?? null,
-              ingredients: '',
-              selected: false,
-            })));
 
       setMatchedItems(items);
       setNewImportItems(imports);
       setStep('preview');
     } catch (err: any) {
       setFetchError(err?.message || 'An unexpected error occurred');
-      setStep('credentials');
+      setStep('start');
     }
-  }, [username, password, saveUsername, productCodeMap, exchangeRate, products]);
+  }, [productCodeMap, exchangeRate, products]);
 
   const handleToggleAll = (selected: boolean) => {
     setMatchedItems(prev => prev.map(item => ({ ...item, selected })));
@@ -469,67 +489,77 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
       section={section}
     >
       <div className="flex flex-col h-full text-xs">
-        {/* Step Indicator */}
-        <div className="flex items-center justify-center gap-2 px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 shrink-0">
-          {(['credentials', 'fetching', 'preview', 'done'] as Step[]).map((s, i) => (
+        {/* Step Indicator (hidden while checking/locked) */}
+        {step !== 'locked' && step !== 'checking' && (
+          <div className="flex items-center justify-center gap-2 px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 shrink-0">
+          {(['start', 'fetching', 'preview', 'done'] as Step[]).map((s, i) => (
             <React.Fragment key={s}>
               {i > 0 && <div className="w-8 h-px bg-slate-300 dark:bg-slate-700" />}
               <div className={`flex items-center gap-1.5 text-[11px] font-semibold ${
                 step === s ? 'text-teal-600 dark:text-teal-400' :
-                (['credentials', 'fetching', 'preview', 'done'].indexOf(step) > i) ? 'text-emerald-600 dark:text-emerald-400' :
+                (['start', 'fetching', 'preview', 'done'].indexOf(step) > i) ? 'text-emerald-600 dark:text-emerald-400' :
                 'text-slate-400 dark:text-slate-600'
               }`}>
                 <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
                   step === s ? 'bg-teal-600 text-white' :
-                  (['credentials', 'fetching', 'preview', 'done'].indexOf(step) > i) ? 'bg-emerald-600 text-white' :
+                  (['start', 'fetching', 'preview', 'done'].indexOf(step) > i) ? 'bg-emerald-600 text-white' :
                   'bg-slate-200 dark:bg-slate-700 text-slate-500'
                 }`}>
-                  {(['credentials', 'fetching', 'preview', 'done'].indexOf(step) > i) ? <Check className="h-3 w-3" /> : i + 1}
+                  {(['start', 'fetching', 'preview', 'done'].indexOf(step) > i) ? <Check className="h-3 w-3" /> : i + 1}
                 </div>
-                <span className="hidden sm:inline">{s === 'credentials' ? 'Login' : s === 'fetching' ? 'Fetching' : s === 'preview' ? 'Review' : 'Done'}</span>
+                <span className="hidden sm:inline">{s === 'start' ? 'Fetch' : s === 'fetching' ? 'Fetching' : s === 'preview' ? 'Review' : 'Done'}</span>
               </div>
             </React.Fragment>
           ))}
         </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
 
-          {/* STEP: Credentials */}
-          {step === 'credentials' && (
-            <div className="max-w-md mx-auto space-y-4">
-              <div className="text-center mb-6">
+          {/* STEP: Checking */}
+          {step === 'checking' && (
+            <div className="max-w-md mx-auto space-y-6">
+              <div className="text-center">
                 <div className="p-3 bg-teal-100 dark:bg-teal-900/40 rounded-xl w-fit mx-auto mb-3">
-                  <Globe className="h-8 w-8 text-teal-600 dark:text-teal-400" />
+                  <Loader2 className="h-8 w-8 text-teal-600 dark:text-teal-400 animate-spin" />
                 </div>
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Connect to MOPH MediTrack
+                  Checking your MOPH unlock status
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                  Enter your MediTrack credentials to fetch the official drug database and update stock prices.
+                  Verifying the current time online...
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* STEP: Locked */}
+          {step === 'locked' && (
+            <form
+              className="max-w-md mx-auto space-y-4"
+              onSubmit={(e) => { e.preventDefault(); handleUnlock(); }}
+            >
+              <div className="text-center mb-6">
+                <div className="p-3 bg-slate-100 dark:bg-slate-800/70 rounded-xl w-fit mx-auto mb-3">
+                  <Lock className="h-8 w-8 text-slate-500 dark:text-slate-400" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Update from MOPH is locked
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  Enter the password to unlock the MOPH price list updater. After the first successful
+                  unlock the feature stays available for 1 year without asking for the password again;
+                  then it locks back.
                 </p>
               </div>
 
-              {fetchError && (
+              {unlockError && (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300 flex items-center gap-2">
                   <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{fetchError}</span>
+                  <span>{unlockError}</span>
                 </div>
               )}
-
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  MediTrack Username
-                </label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. 003262"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono focus:border-teal-500 focus:bg-white focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                  autoFocus
-                />
-              </div>
 
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -537,38 +567,21 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                 </label>
                 <div className="relative">
                   <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter your password"
+                    type={showUnlockPassword ? 'text' : 'password'}
+                    value={unlockPassword}
+                    onChange={(e) => setUnlockPassword(e.target.value)}
+                    placeholder="Enter password"
+                    autoFocus
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 pr-10 focus:border-teal-500 focus:bg-white focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
+                    onClick={() => setShowUnlockPassword(!showUnlockPassword)}
                     className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                   >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showUnlockPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="saveUsernameCheck"
-                  checked={saveUsername}
-                  onChange={(e) => setSaveUsername(e.target.checked)}
-                  className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500 border-gray-300 cursor-pointer"
-                />
-                <label htmlFor="saveUsernameCheck" className="text-[11px] text-slate-600 dark:text-slate-400 cursor-pointer">
-                  Remember username
-                </label>
-              </div>
-
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-200 dark:border-slate-800">
-                <Lock className="h-3 w-3 inline mr-1" />
-                Your credentials are used only for this session to authenticate with the MOPH API. They are not stored on any server.
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -580,13 +593,60 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                   Cancel
                 </button>
                 <button
+                  type="submit"
+                  className="flex items-center space-x-1.5 rounded-xl bg-teal-600 px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-teal-700"
+                >
+                  <Unlock className="h-4 w-4" />
+                  <span>Unlock</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* STEP: Start */}
+          {step === 'start' && (
+            <div className="max-w-md mx-auto space-y-4">
+              <div className="text-center mb-6">
+                <div className="p-3 bg-teal-100 dark:bg-teal-900/40 rounded-xl w-fit mx-auto mb-3">
+                  <Globe className="h-8 w-8 text-teal-600 dark:text-teal-400" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Update from the official MOPH price list
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  Fetches the latest official drugs public price list (public prices, pharmacist margins and
+                  agents) from moph.gov.lb, then matches your stock to review and apply price updates or
+                  import new marketed drugs. No credentials required.
+                </p>
+                {unlockExpiry && (
+                  <div className="mt-2 inline-block rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 px-2.5 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+                    Unlocked — password won't be asked again until {unlockExpiry.toLocaleDateString()}
+                  </div>
+                )}
+              </div>
+
+              {fetchError && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300 flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{fetchError}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
                   type="button"
-                  onClick={handleAuthenticate}
-                  disabled={!username.trim() || !password.trim()}
-                  className="flex items-center space-x-1.5 rounded-xl bg-teal-600 px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-teal-700 disabled:opacity-40"
+                  onClick={onClose}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFetch}
+                  className="flex items-center space-x-1.5 rounded-xl bg-teal-600 px-5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-teal-700"
                 >
                   <Download className="h-4 w-4" />
-                  <span>Connect & Fetch Data</span>
+                  <span>Connect & Fetch Price List</span>
                 </button>
               </div>
             </div>
@@ -660,7 +720,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
               </div>
 
               <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                {totalMophMedications.toLocaleString()} MOPH catalog entries | {matchedItems.length} in your stock | {itemsWithChange.length} with changes | {newImportItems.length} market drugs not in stock
+                {totalMophMedications.toLocaleString()} official price-list entries | {matchedItems.length} in your stock | {itemsWithChange.length} with changes | {newImportItems.length} market drugs not in stock
               </div>
 
               {/* TAB: Matched (update existing) */}
@@ -756,9 +816,9 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                                     {item.productCode}
                                   </td>
                                   <td className="px-3 py-2 text-slate-800 dark:text-slate-200 font-semibold max-w-[180px] truncate">
-                                    {item.mophData.BrandName}
+                                    {item.name}
                                     <div className="text-[10px] font-normal text-slate-400">
-                                      {item.mophData.Strength} | {item.mophData.Form}
+                                      {item.strength} | {item.form}
                                     </div>
                                   </td>
                                   <td className="px-3 py-2 text-right max-w-[140px] truncate">
@@ -840,7 +900,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={() => setStep('credentials')}
+                        onClick={handleFetch}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                       >
                         <RefreshCw className="h-3.5 w-3.5 inline mr-1" />
@@ -1011,7 +1071,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={() => setStep('credentials')}
+                        onClick={handleFetch}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                       >
                         <RefreshCw className="h-3.5 w-3.5 inline mr-1" />
