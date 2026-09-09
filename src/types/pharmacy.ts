@@ -128,6 +128,8 @@ export interface PurchaseItem {
   unitCostUSD: number;
   unitCostLBP: number;
   sellingPriceLBP: number;
+  sellingPriceUSD?: number;
+  discount?: number;
   batchNumber: string;
   expiryDate: string;
   isPiece?: boolean;
@@ -146,6 +148,7 @@ export interface PurchaseInvoice {
   status: 'received' | 'pending';
   paid: boolean;
   timestamp: number;
+  currency?: 'USD' | 'LBP';
 }
 
 export interface Supplier {

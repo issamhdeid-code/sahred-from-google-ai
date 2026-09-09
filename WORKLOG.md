@@ -110,3 +110,11 @@ granular product-array mutations, and the alert-check effect — these are safe 
   `[products]` alert-check effect; `mergeProductsArrays` O(n·m) → index by code.
 - Any new synced entity still needs: broadcast on write, incoming-switch case, snapshot payload entry
   (see AGENTS.md "Two-PC sync model").
+## What was completed in THIS session (Purchase inputs default to 0 — NOT committed)
+- **Request**: "default input should be 0 always" for purchase item quantity and cost inputs.
+- **Fix**: Modified `src/components/purchase/PurchaseView.tsx`:
+  - Set `itemQty` and `itemCostUSD` `useState` initial values to `'0'`.
+  - Updated `placeholder` properties from '10' and '5.00' to '0'.
+  - Fixed form reset logic across all three instances (`handleAddItemToInvoice`, `handleOpenCreate`, `handleEditPurchase`) to reset these fields to `'0'`.
+  - Fixed fallback parsing in `handleAddItemToInvoice` so that a user entry of `'0'` correctly yields `0`, instead of falling back to a default value (e.g. `1` or `5.00`) due to javascript `||` falsy checks.
+- Verified: `npm run lint` and `npm run build` GREEN.

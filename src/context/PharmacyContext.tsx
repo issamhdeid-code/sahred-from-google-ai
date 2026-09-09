@@ -2362,11 +2362,39 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           const addedStock = purItems.reduce((acc, item) => acc + ((item.isPiece && prod.piecesPerBox) ? (item.quantity / prod.piecesPerBox) : item.quantity), 0);
           const nextStock = prod.stockQuantity + addedStock;
           const lastPurItem = purItems[purItems.length - 1];
+
+          let newPriceLBP = prod.priceLBP;
+          let newPriceUSD = prod.priceUSD;
+          let newCostPriceUSD = prod.costPriceUSD;
+          let priceChangedAt = prod.priceChangedAt;
+
+          if (lastPurItem.sellingPriceLBP !== undefined && lastPurItem.sellingPriceLBP > 0) {
+            if (lastPurItem.sellingPriceLBP !== prod.priceLBP) {
+              newPriceLBP = lastPurItem.sellingPriceLBP;
+              priceChangedAt = Date.now();
+            }
+          }
+          if (lastPurItem.sellingPriceUSD !== undefined && lastPurItem.sellingPriceUSD > 0) {
+            if (lastPurItem.sellingPriceUSD !== prod.priceUSD) {
+              newPriceUSD = lastPurItem.sellingPriceUSD;
+              priceChangedAt = Date.now();
+            }
+          }
+          if (lastPurItem.unitCostUSD !== undefined && lastPurItem.unitCostUSD > 0) {
+            newCostPriceUSD = lastPurItem.unitCostUSD;
+          }
+
           const nextProd: Product = {
             ...prod,
             stockQuantity: nextStock,
             batchNumber: lastPurItem.batchNumber || prod.batchNumber,
             expiryDate: lastPurItem.expiryDate || prod.expiryDate,
+            priceLBP: newPriceLBP,
+            priceUSD: newPriceUSD,
+            costPriceUSD: newCostPriceUSD,
+            previousPriceLBP: newPriceLBP !== prod.priceLBP ? prod.priceLBP : prod.previousPriceLBP,
+            previousPriceUSD: newPriceUSD !== prod.priceUSD ? prod.priceUSD : prod.previousPriceUSD,
+            priceChangedAt,
             updatedAt: Date.now(),
             version: (prod.version || 1) + 1,
           };
@@ -2460,11 +2488,41 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
             if (netChange !== 0 || newItems.length > 0) {
               const lastNewItem = newItems.length > 0 ? newItems[newItems.length - 1] : undefined;
+              
+              let newPriceLBP = prod.priceLBP;
+              let newPriceUSD = prod.priceUSD;
+              let newCostPriceUSD = prod.costPriceUSD;
+              let priceChangedAt = prod.priceChangedAt;
+
+              if (lastNewItem) {
+                if (lastNewItem.sellingPriceLBP !== undefined && lastNewItem.sellingPriceLBP > 0) {
+                  if (lastNewItem.sellingPriceLBP !== prod.priceLBP) {
+                    newPriceLBP = lastNewItem.sellingPriceLBP;
+                    priceChangedAt = Date.now();
+                  }
+                }
+                if (lastNewItem.sellingPriceUSD !== undefined && lastNewItem.sellingPriceUSD > 0) {
+                  if (lastNewItem.sellingPriceUSD !== prod.priceUSD) {
+                    newPriceUSD = lastNewItem.sellingPriceUSD;
+                    priceChangedAt = Date.now();
+                  }
+                }
+                if (lastNewItem.unitCostUSD !== undefined && lastNewItem.unitCostUSD > 0) {
+                  newCostPriceUSD = lastNewItem.unitCostUSD;
+                }
+              }
+
               const nextProd: Product = {
                 ...prod,
                 stockQuantity: Math.max(0, prod.stockQuantity + netChange),
                 batchNumber: lastNewItem?.batchNumber || prod.batchNumber,
                 expiryDate: lastNewItem?.expiryDate || prod.expiryDate,
+                priceLBP: newPriceLBP,
+                priceUSD: newPriceUSD,
+                costPriceUSD: newCostPriceUSD,
+                previousPriceLBP: newPriceLBP !== prod.priceLBP ? prod.priceLBP : prod.previousPriceLBP,
+                previousPriceUSD: newPriceUSD !== prod.priceUSD ? prod.priceUSD : prod.previousPriceUSD,
+                priceChangedAt,
                 updatedAt: Date.now(),
                 version: (prod.version || 1) + 1,
               };

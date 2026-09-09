@@ -40,12 +40,17 @@ export const PurchaseView: React.FC = () => {
   // New Purchase Items
   const [items, setItems] = useState<PurchaseItem[]>([]);
   const [currentProductId, setCurrentProductId] = useState('');
-  const [itemQty, setItemQty] = useState('10');
-  const [itemCostUSD, setItemCostUSD] = useState('');
+  const [itemQty, setItemQty] = useState('0');
+  const [itemCostUSD, setItemCostUSD] = useState('0');
+  const [itemTotalInput, setItemTotalInput] = useState('0');
+  const [isTotalFocused, setIsTotalFocused] = useState(false);
+  const [itemDiscount, setItemDiscount] = useState('0');
+  const [itemPublicPrice, setItemPublicPrice] = useState('0');
   const [itemBatch, setItemBatch] = useState('');
   const [itemExpiry, setItemExpiry] = useState('');
   const [displayExpiry, setDisplayExpiry] = useState('');
   const [itemUnit, setItemUnit] = useState<'box' | 'piece'>('box');
+  const [purchaseCurrency, setPurchaseCurrency] = useState<'USD' | 'LBP'>('LBP');
 
   // Medication Search & Barcode Scanner State
   const [productSearchQuery, setProductSearchQuery] = useState('');
@@ -64,8 +69,18 @@ export const PurchaseView: React.FC = () => {
   const expiryInputRef = useRef<HTMLInputElement | null>(null);
   const qtyInputRef = useRef<HTMLInputElement | null>(null);
   const costInputRef = useRef<HTMLInputElement | null>(null);
+  const discountInputRef = useRef<HTMLInputElement | null>(null);
+  const publicPriceInputRef = useRef<HTMLInputElement | null>(null);
+  const totalInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedProduct = products.find((p) => p.id === currentProductId);
+
+  const formatWithCommas = (val: string) => {
+    if (!val) return '';
+    const parts = val.toString().split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  };
 
   // Global Barcode Scanner Listener when New Purchase modal is open
   useBarcodeScanner({
@@ -112,9 +127,10 @@ export const PurchaseView: React.FC = () => {
   }, []);
 
   // Helper to find the expiry date and batch number from the most recent purchase for a given product
-  const getLastPurchaseDetails = (prod: Product): { expiryDate: string, batchNumber: string } => {
+  const getLastPurchaseDetails = (prod: Product): { expiryDate: string, batchNumber: string, lastItem?: PurchaseItem } => {
     let expiryDate = '';
     let batchNumber = '';
+    let lastItem: PurchaseItem | undefined;
     
     if (!purchases || purchases.length === 0) return { expiryDate, batchNumber };
 
@@ -133,6 +149,9 @@ export const PurchaseView: React.FC = () => {
           (it.productCode && prod.code && it.productCode.toLowerCase() === prod.code.toLowerCase())
       );
       if (foundItem) {
+        if (!lastItem) {
+          lastItem = foundItem;
+        }
         if (!expiryDate && foundItem.expiryDate && foundItem.expiryDate.trim()) {
           expiryDate = foundItem.expiryDate.trim();
         }
@@ -145,7 +164,7 @@ export const PurchaseView: React.FC = () => {
       }
     }
 
-    return { expiryDate, batchNumber };
+    return { expiryDate, batchNumber, lastItem };
   };
 
   // Helper to format stock in "X box Y pieces" format using product's pieceName
@@ -176,7 +195,8 @@ export const PurchaseView: React.FC = () => {
 
   const selectProduct = (prod: Product, autoFocusQty = true) => {
     setCurrentProductId(prod.id);
-    setItemCostUSD(prod.costPriceUSD != null ? prod.costPriceUSD.toString() : '5.00');
+    const defaultCost = prod.costPriceUSD != null ? prod.costPriceUSD : 0;
+    setItemCostUSD(purchaseCurrency === 'USD' ? defaultCost.toString() : Math.round(defaultCost * exchangeRate).toString());
     setItemUnit('box');
     setProductSearchQuery(prod.name);
     setIsSearchDropdownOpen(false);
@@ -248,7 +268,75 @@ export const PurchaseView: React.FC = () => {
         expiryInputRef.current?.select();
       }, 50);
     }
+
+    // Discount & Public Price logic
+    let initialDiscount = 0;
+    if (lastDetails.lastItem && lastDetails.lastItem.discount !== undefined) {
+      initialDiscount = lastDetails.lastItem.discount;
+    } else {
+      initialDiscount = prod.pharmacistMarginProfit || 0;
+    }
+    setItemDiscount(initialDiscount.toString());
+
+    const lastPurchasedPublicPriceUSD = lastDetails.lastItem?.sellingPriceUSD || 0;
+    const lastPurchasedPublicPriceLBP = lastDetails.lastItem?.sellingPriceLBP || 0;
+    const stockPublicPriceUSD = prod.priceUSD || 0;
+    const stockPublicPriceLBP = prod.priceLBP || 0;
+
+    let derivedPublicPrice = 0;
+    if (purchaseCurrency === 'USD') {
+      derivedPublicPrice = lastPurchasedPublicPriceUSD > 0 ? lastPurchasedPublicPriceUSD : stockPublicPriceUSD;
+    } else {
+      derivedPublicPrice = lastPurchasedPublicPriceLBP > 0 ? lastPurchasedPublicPriceLBP : stockPublicPriceLBP;
+    }
+    
+    if (derivedPublicPrice === 0) {
+      const parsedCost = purchaseCurrency === 'USD' ? defaultCost : Math.round(defaultCost * exchangeRate);
+      if (initialDiscount < 100) {
+        derivedPublicPrice = parsedCost / (1 - initialDiscount / 100);
+      } else {
+        derivedPublicPrice = parsedCost;
+      }
+      if (purchaseCurrency === 'LBP') {
+        derivedPublicPrice = Math.round(derivedPublicPrice);
+      } else {
+        derivedPublicPrice = Number(derivedPublicPrice.toFixed(2));
+      }
+    }
+    
+    setItemPublicPrice(derivedPublicPrice.toString());
   };
+
+  useEffect(() => {
+    if (itemPublicPrice === '0' || itemPublicPrice === '') {
+      const parsedCost = parseFloat(itemCostUSD) || 0;
+      const parsedDiscount = parseFloat(itemDiscount) || 0;
+      if (parsedCost > 0 && parsedDiscount < 100) {
+        let calc = parsedCost / (1 - parsedDiscount / 100);
+        if (purchaseCurrency === 'LBP') calc = Math.round(calc);
+        else calc = Number(calc.toFixed(2));
+        setItemPublicPrice(calc.toString());
+      }
+    }
+    // We explicitly omit `itemPublicPrice` from dependencies.
+    // This effect should only recalculate the public price when the COST or DISCOUNT
+    // changes from their source, AND the public price is currently blank/zero.
+    // Including `itemPublicPrice` causes a bug where the user deleting the last digit 
+    // triggers this effect, which sees '' and instantly repopulates it with the calculation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemCostUSD, itemDiscount, purchaseCurrency]);
+
+  useEffect(() => {
+    if (!isTotalFocused) {
+      const qty = parseInt(itemQty, 10) || 0;
+      const cost = parseFloat(itemCostUSD) || 0;
+      let calculated = qty * cost;
+      if (purchaseCurrency !== 'USD') {
+        calculated = Math.round(calculated);
+      }
+      setItemTotalInput(calculated.toString());
+    }
+  }, [itemCostUSD, itemQty, isTotalFocused, purchaseCurrency]);
 
   const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target.value;
@@ -365,27 +453,33 @@ export const PurchaseView: React.FC = () => {
       e.preventDefault();
       const q = productSearchQuery.trim().toLowerCase();
 
-      // 1. Exact barcode or code match takes priority if user typed or scanned
-      if (q) {
-        const exactMatch = products.find(
-          (p) =>
-            (p.barcode || '').toLowerCase() === q ||
-            p.code.toLowerCase() === q
-        );
+      // If nothing is typed, just open the dropdown and do not auto-select
+      if (!q) {
+        setIsSearchDropdownOpen(true);
+        return;
+      }
 
-        if (exactMatch) {
-          selectProduct(exactMatch, true);
-          setScanStatusMessage({
-            type: 'success',
-            text: `Found: ${exactMatch.name} (${exactMatch.barcode || exactMatch.code})`,
-          });
-          setTimeout(() => setScanStatusMessage(null), 3000);
-          return;
-        }
+      // 1. Exact barcode or code match takes priority if user typed or scanned
+      const exactMatch = products.find(
+        (p) =>
+          (p.barcode || '').toLowerCase() === q ||
+          p.code.toLowerCase() === q
+      );
+
+      if (exactMatch) {
+        selectProduct(exactMatch, true);
+        setScanStatusMessage({
+          type: 'success',
+          text: `Found: ${exactMatch.name} (${exactMatch.barcode || exactMatch.code})`,
+        });
+        setTimeout(() => setScanStatusMessage(null), 3000);
+        return;
       }
 
       // 2. Select highlighted item from dropdown list
-      if (filteredProducts.length > 0) {
+      // BUT ONLY IF the dropdown was already open and user is explicitly highlighting something.
+      // If they just typed "a" and pressed enter, we should open the dropdown so they can see the list.
+      if (filteredProducts.length > 0 && isSearchDropdownOpen) {
         const safeIndex =
           highlightedIndex >= 0 && highlightedIndex < filteredProducts.length
             ? highlightedIndex
@@ -400,6 +494,10 @@ export const PurchaseView: React.FC = () => {
           setTimeout(() => setScanStatusMessage(null), 2500);
           return;
         }
+      } else {
+         // Open dropdown if it wasn't open so user can pick
+         setIsSearchDropdownOpen(true);
+         return;
       }
 
       // 3. Fallback message if no match found
@@ -424,9 +522,28 @@ export const PurchaseView: React.FC = () => {
       searchInputRef.current?.focus();
       return;
     }
-    const qty = parseInt(itemQty, 10) || 1;
-    const costUSD = parseFloat(itemCostUSD) || selectedProduct.costPriceUSD || 5.0;
-    const costLBP = Math.round(costUSD * exchangeRate);
+    const parsedQty = parseInt(itemQty, 10);
+    const qty = isNaN(parsedQty) ? 0 : parsedQty;
+    const parsedCost = parseFloat(itemCostUSD);
+    const parsedDiscount = parseFloat(itemDiscount) || 0;
+    const parsedPublicPrice = parseFloat(itemPublicPrice) || 0;
+    
+    let costUSD = 0;
+    let costLBP = 0;
+    let publicPriceUSD = 0;
+    let publicPriceLBP = 0;
+    
+    if (purchaseCurrency === 'USD') {
+      costUSD = isNaN(parsedCost) ? (selectedProduct.costPriceUSD || 0) : parsedCost;
+      costLBP = Math.round(costUSD * exchangeRate);
+      publicPriceUSD = parsedPublicPrice;
+      publicPriceLBP = Math.round(parsedPublicPrice * exchangeRate);
+    } else {
+      costLBP = isNaN(parsedCost) ? Math.round((selectedProduct.costPriceUSD || 0) * exchangeRate) : parsedCost;
+      costUSD = costLBP / exchangeRate;
+      publicPriceLBP = parsedPublicPrice;
+      publicPriceUSD = parsedPublicPrice / exchangeRate;
+    }
 
     let finalExpiry = itemExpiry;
     if (!finalExpiry && displayExpiry.trim()) {
@@ -449,7 +566,9 @@ export const PurchaseView: React.FC = () => {
         quantity: qty,
         unitCostUSD: costUSD,
         unitCostLBP: costLBP,
-        sellingPriceLBP: selectedProduct.priceLBP,
+        sellingPriceLBP: publicPriceLBP,
+        sellingPriceUSD: publicPriceUSD,
+        discount: parsedDiscount,
         batchNumber: itemBatch || selectedProduct.batchNumber || '',
         expiryDate: finalExpiry || '',
         isPiece: itemUnit === 'piece',
@@ -459,8 +578,11 @@ export const PurchaseView: React.FC = () => {
     // Reset current item inputs & search query for fast next entry
     setCurrentProductId('');
     setProductSearchQuery('');
-    setItemQty('10');
-    setItemCostUSD('');
+    setItemQty('0');
+    setItemCostUSD('0');
+    setItemTotalInput('0');
+    setItemDiscount('0');
+    setItemPublicPrice('0');
     setItemBatch('');
     setItemExpiry('');
     setDisplayExpiry('');
@@ -495,6 +617,7 @@ export const PurchaseView: React.FC = () => {
         totalCostUSD,
         totalCostLBP,
         paid: isPaid,
+        currency: purchaseCurrency,
       });
     } else {
       recordPurchase({
@@ -507,6 +630,7 @@ export const PurchaseView: React.FC = () => {
         exchangeRate,
         status: 'received',
         paid: isPaid,
+        currency: purchaseCurrency,
       });
     }
 
@@ -521,10 +645,14 @@ export const PurchaseView: React.FC = () => {
     setItems([]);
     setInvoiceDate(new Date().toISOString().split('T')[0]);
     setIsPaid(true);
+    setPurchaseCurrency('LBP');
     setCurrentProductId('');
     setProductSearchQuery('');
-    setItemQty('10');
-    setItemCostUSD('');
+    setItemQty('0');
+    setItemCostUSD('0');
+    setItemTotalInput('0');
+    setItemDiscount('0');
+    setItemPublicPrice('0');
     setItemBatch('');
     setItemExpiry('');
     setDisplayExpiry('');
@@ -540,11 +668,15 @@ export const PurchaseView: React.FC = () => {
     setSelectedSupplierId(inv.supplierId);
     setInvoiceDate(inv.date);
     setIsPaid(inv.paid);
+    setPurchaseCurrency(inv.currency || 'LBP');
     setItems(inv.items);
     setCurrentProductId('');
     setProductSearchQuery('');
-    setItemQty('10');
-    setItemCostUSD('');
+    setItemQty('0');
+    setItemCostUSD('0');
+    setItemTotalInput('0');
+    setItemDiscount('0');
+    setItemPublicPrice('0');
     setItemBatch('');
     setItemExpiry('');
     setDisplayExpiry('');
@@ -778,7 +910,7 @@ export const PurchaseView: React.FC = () => {
           height="auto"
         >
           <form onSubmit={handleSavePurchase} className="p-5 space-y-4 text-xs flex-1 flex flex-col justify-between overflow-y-auto min-h-0">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Select Supplier / Agent
@@ -822,6 +954,28 @@ export const PurchaseView: React.FC = () => {
                   <option value="debt">Unpaid (Add to Supplier Debt)</option>
                 </select>
               </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Currency
+                </label>
+                <select
+                  value={purchaseCurrency}
+                  onChange={(e) => {
+                    const newCurrency = e.target.value as 'USD' | 'LBP';
+                    setPurchaseCurrency(newCurrency);
+                    // Update input if a product is selected
+                    if (selectedProduct) {
+                      const defaultCost = selectedProduct.costPriceUSD != null ? selectedProduct.costPriceUSD : 0;
+                      setItemCostUSD(newCurrency === 'USD' ? defaultCost.toString() : Math.round(defaultCost * exchangeRate).toString());
+                    }
+                  }}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="LBP">LBP (ل.ل)</option>
+                  <option value="USD">USD ($)</option>
+                </select>
+              </div>
             </div>
 
             {/* Add Items Row */}
@@ -831,11 +985,14 @@ export const PurchaseView: React.FC = () => {
                   <Package className="h-3.5 w-3.5 text-teal-600" />
                   Add Medication / Item to Shipment
                 </span>
-
-                <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
-                  <ScanBarcode className="h-3.5 w-3.5 text-teal-600" />
-                  <span>Scan barcode or type name/code</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleAddItemToInvoice}
+                  className="rounded-lg bg-teal-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-teal-700 transition-colors shadow-sm cursor-pointer active:scale-95 flex items-center justify-center gap-1"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Item</span>
+                </button>
               </div>
 
               {scanStatusMessage && (
@@ -855,7 +1012,7 @@ export const PurchaseView: React.FC = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-7 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-9 gap-3">
                 <div className="sm:col-span-2 relative" ref={searchDropdownRef}>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide">
@@ -1115,41 +1272,115 @@ export const PurchaseView: React.FC = () => {
                         costInputRef.current?.select();
                       }
                     }}
-                    placeholder="10"
+                    placeholder="0"
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit Cost USD ($)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                    Unit Cost {purchaseCurrency === 'USD' ? 'USD ($)' : 'LBP (ل.ل)'}
+                  </label>
                   <input
                     ref={costInputRef}
                     id="purchase-item-cost"
-                    type="number"
-                    step="0.01"
-                    value={itemCostUSD}
-                    onChange={(e) => setItemCostUSD(e.target.value)}
+                    type="text"
+                    value={formatWithCommas(itemCostUSD)}
+                    onChange={(e) => setItemCostUSD(e.target.value.replace(/,/g, ''))}
                     onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        discountInputRef.current?.focus();
+                        discountInputRef.current?.select();
+                      }
+                    }}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Discount (%)</label>
+                  <input
+                    ref={discountInputRef}
+                    type="text"
+                    value={formatWithCommas(itemDiscount)}
+                    onChange={(e) => setItemDiscount(e.target.value.replace(/,/g, ''))}
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        publicPriceInputRef.current?.focus();
+                        publicPriceInputRef.current?.select();
+                      }
+                    }}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                    Public Price
+                  </label>
+                  <input
+                    ref={publicPriceInputRef}
+                    type="text"
+                    value={formatWithCommas(itemPublicPrice)}
+                    onChange={(e) => setItemPublicPrice(e.target.value.replace(/,/g, ''))}
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        totalInputRef.current?.focus();
+                        totalInputRef.current?.select();
+                      }
+                    }}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                    Total / Item
+                  </label>
+                  <input
+                    ref={totalInputRef}
+                    type="text"
+                    value={formatWithCommas(itemTotalInput)}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/,/g, '');
+                      setItemTotalInput(raw);
+                      const newTotal = parseFloat(raw);
+                      if (!isNaN(newTotal)) {
+                        const qty = parseInt(itemQty, 10);
+                        const safeQty = isNaN(qty) || qty <= 0 ? 1 : qty;
+                        let newCost = newTotal / safeQty;
+                        if (purchaseCurrency === 'LBP') newCost = Math.round(newCost);
+                        setItemCostUSD(newCost.toString());
+                      }
+                    }}
+                    onFocus={(e) => {
+                      setIsTotalFocused(true);
+                      e.target.select();
+                    }}
+                    onBlur={() => {
+                      setIsTotalFocused(false);
+                      const raw = itemTotalInput.replace(/,/g, '');
+                      const val = parseFloat(raw) || 0;
+                      setItemTotalInput(val.toString());
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
                         handleAddItemToInvoice();
                       }
                     }}
-                    placeholder="5.00"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    placeholder="0"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   />
-                </div>
-
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    onClick={handleAddItemToInvoice}
-                    className="w-full rounded-lg bg-teal-600 py-1.5 text-xs font-bold text-white hover:bg-teal-700 transition-colors shadow-sm cursor-pointer active:scale-95 flex items-center justify-center gap-1"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span>Add Item</span>
-                  </button>
                 </div>
               </div>
 
