@@ -19,6 +19,7 @@ import { LogsView } from './components/logs/LogsView';
 import { SettingsView } from './components/settings/SettingsView';
 import { PriceUpdaterModal } from './components/stock/PriceUpdaterModal';
 import { CSVImportModal } from './components/stock/CSVImportModal';
+import { MOPHPriceUpdaterModal } from './components/stock/MOPHPriceUpdaterModal';
 import { Product } from './types/pharmacy';
 
 const PharmacyAppContent: React.FC = () => {
@@ -28,6 +29,7 @@ const PharmacyAppContent: React.FC = () => {
   const [isPriceUpdaterOpen, setIsPriceUpdaterOpen] = useState(false);
   const [priceUpdaterCode, setPriceUpdaterCode] = useState('');
   const [isCSVImportOpen, setIsCSVImportOpen] = useState(false);
+  const [isMOPHUpdaterOpen, setIsMOPHUpdaterOpen] = useState(false);
 
   // Selected drug for scientifics view
   const [selectedScientificProduct, setSelectedScientificProduct] = useState<Product | null>(null);
@@ -61,6 +63,7 @@ const PharmacyAppContent: React.FC = () => {
       } else if (e.key === 'Escape') {
         setIsPriceUpdaterOpen(false);
         setIsCSVImportOpen(false);
+        setIsMOPHUpdaterOpen(false);
       }
     };
 
@@ -107,6 +110,7 @@ const PharmacyAppContent: React.FC = () => {
           <StockView
             onViewScientific={handleViewScientific}
             onOpenCSVImport={() => setIsCSVImportOpen(true)}
+            onOpenMOPHUpdater={() => setIsMOPHUpdaterOpen(true)}
           />
         </div>
 
@@ -164,6 +168,13 @@ const PharmacyAppContent: React.FC = () => {
       {isCSVImportOpen && (
         <CSVImportModal 
           onClose={() => setIsCSVImportOpen(false)} 
+          section={activeTab}
+        />
+      )}
+
+      {isMOPHUpdaterOpen && (
+        <MOPHPriceUpdaterModal
+          onClose={() => setIsMOPHUpdaterOpen(false)}
           section={activeTab}
         />
       )}

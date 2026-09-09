@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import * as XLSX from 'xlsx';
 
 dotenv.config();
 
@@ -216,6 +217,372 @@ Return ONLY valid JSON matching this schema:
       error: err?.message || 'Failed to enrich scientific data with AI',
       fallbackNeeded: true,
     });
+  }
+});
+
+// ── MOPH MediTrack API Proxy ──────────────────────────────────────────────
+// Proxies requests to the Lebanese Ministry of Public Health MediTrack API
+// to avoid CORS issues from the Electron renderer process.
+//
+// Verified live endpoints (2026):
+//   Token:  POST https://meditrack.moph.gov.lb/api/token
+//           (form-encoded: grant_type=password&username=...&password=...)
+//   Prices: POST https://meditrack.moph.gov.lb/api/api/MOH/GetMedicationPriceInfo
+//           (Bearer token + JSON {} body) -> full catalog w/ PublicPrice
+
+const MOPH_API_BASE = 'https://meditrack.moph.gov.lb';
+
+// Authenticate with MediTrack and return OAuth2 bearer token
+app.post('/api/moph/authenticate', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    const params = new URLSearchParams();
+    params.append('grant_type', 'password');
+    params.append('username', username);
+    params.append('password', password);
+
+    const response = await fetch(`${MOPH_API_BASE}/api/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      return res.status(response.status).json({
+        error: `Authentication failed (${response.status})`,
+        details: errorText,
+      });
+    }
+
+    const data = await response.json();
+    return res.json({
+      accessToken: data.access_token,
+      tokenType: data.token_type,
+      expiresIn: data.expires_in,
+    });
+  } catch (err: any) {
+    console.error('MOPH authentication error:', err?.message || err);
+    return res.status(500).json({ error: err?.message || 'Failed to connect to MOPH API' });
+  }
+});
+
+// Fetch the full medication + public price catalog from MediTrack
+app.post('/api/moph/price-catalog', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'Missing authorization token' });
+    }
+
+    const response = await fetch(`${MOPH_API_BASE}/api/api/MOH/GetMedicationPriceInfo`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req.body || {}),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      return res.status(response.status).json({
+        error: `Failed to fetch price catalog (${response.status})`,
+        details: errorText,
+      });
+    }
+
+    const data = await response.json();
+    return res.json(data);
+  } catch (err: any) {
+    console.error('MOPH price catalog fetch error:', err?.message || err);
+    return res.status(500).json({ error: err?.message || 'Failed to fetch price catalog from MOPH' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// MOPH price list (.xls) scraping + LNDD ingredients lookup
+//
+// The official Drugs Public Price List page publishes monthly
+// "WebMarketed########.xls" files. Every row carries:
+//   Code (= MOHCode), Registration number, Brand name, Strength, Presentation,
+//   Form, Agent, Manufacturer, Country, Public Price LL, Pharmacist Margin, Stratum
+// We parse that file once (with a short cache) so the app can fill the
+// "Pharmacist Margin" (and price/agent) columns from official data without
+// needing per-drug detail page scrapes. Ingredients are sourced from the LNDD
+// drug database (same site) via its public search page.
+// ---------------------------------------------------------------------------
+
+const MOPH_PRICELIST_PAGE = 'https://moph.gov.lb/en/Pages/3/3101/drugs-public-price-list-';
+const MOPH_LNDD_SEARCH = 'https://www.moph.gov.lb/en/Drugs/index/3/4848';
+
+let priceListCache: { ts: number; rows: MOPHPriceListRow[] } | null = null;
+
+interface MOPHPriceListRow {
+  code: number | string;
+  registrationNumber: string;
+  brandName: string;
+  strength: string;
+  presentation: string;
+  form: string;
+  agent: string;
+  manufacturer: string;
+  country: string;
+  publicPriceLBP: number | null;
+  pharmacistMargin: number | null;
+  stratum: string;
+}
+
+function stripTrailingComma(text: string): string {
+  return text.replace(/[,\s]+$/, '').trim();
+}
+
+function parseXlsPriceNumber(val: unknown): number | null {
+  if (val === undefined || val === null) return null;
+  if (typeof val === 'number') return isFinite(val) ? val : null;
+  const cleaned = stripTrailingComma(String(val)).replace(/,/g, '').trim();
+  if (!cleaned) return null;
+  const num = Number(cleaned);
+  return isFinite(num) ? num : null;
+}
+
+async function findLatestMarketedXlsUrl(): Promise<string> {
+  const pageRes = await fetch(MOPH_PRICELIST_PAGE, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!pageRes.ok) {
+    throw new Error(`Failed to fetch MOPH public price list page (${pageRes.status})`);
+  }
+  const html = await pageRes.text();
+
+  // Find all WebMarketed########.xls links, keep the one with the newest date in the filename.
+  const candidates: Array<{ url: string; date: number }> = [];
+  const hrefRe = /href="([^"]*WebMarketed(\d{8})\.xls[^"]*)"/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null) {
+    const raw = m[1];
+    const url = raw.startsWith('http') ? raw : `https://moph.gov.lb${raw}`;
+    candidates.push({ url, date: Number(m[2]) });
+  }
+  if (candidates.length === 0) {
+    throw new Error('No WebMarketed price list file found on MOPH public price list page');
+  }
+  candidates.sort((a, b) => b.date - a.date);
+  return candidates[0].url;
+}
+
+async function downloadPriceListXls(): Promise<MOPHPriceListRow[]> {
+  const url = await findLatestMarketedXlsUrl();
+  const xlsRes = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!xlsRes.ok) {
+    throw new Error(`Failed to download MOPH price list file (${xlsRes.status})`);
+  }
+  const buffer = Buffer.from(await xlsRes.arrayBuffer());
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, unknown>[];
+
+  const rows: MOPHPriceListRow[] = [];
+  for (const r of rawRows) {
+    const code = parseXlsPriceNumber(r['Code']);
+    if (code === null) continue;
+    rows.push({
+      code,
+      registrationNumber: stripTrailingComma(String(r['Registration number'] ?? '')),
+      brandName: stripTrailingComma(String(r['Brand name'] ?? '')),
+      strength: stripTrailingComma(String(r['Strength'] ?? '')),
+      presentation: stripTrailingComma(String(r['Presentation'] ?? '')),
+      form: stripTrailingComma(String(r['Form'] ?? '')),
+      agent: stripTrailingComma(String(r['Agent'] ?? '')),
+      manufacturer: stripTrailingComma(String(r['Manufacturer'] ?? '')),
+      country: stripTrailingComma(String(r['Country'] ?? '')),
+      publicPriceLBP: parseXlsPriceNumber(r['Public Price LL']),
+      pharmacistMargin: parseXlsPriceNumber(r['Pharmacist Margin']),
+      stratum: stripTrailingComma(String(r['Stratum'] ?? '')),
+    });
+  }
+  return rows;
+}
+
+async function getPriceListRows(): Promise<MOPHPriceListRow[]> {
+  if (priceListCache && Date.now() - priceListCache.ts < 6 * 60 * 60 * 1000) {
+    return priceListCache.rows;
+  }
+  const rows = await downloadPriceListXls();
+  priceListCache = { ts: Date.now(), rows };
+  return rows;
+}
+
+// GET /api/moph/price-list -> parsed official marketed drug price list
+app.get('/api/moph/price-list', async (req, res) => {
+  try {
+    const rows = await getPriceListRows();
+    return res.json(rows);
+  } catch (err: any) {
+    console.error('MOPH price list error:', err?.message || err);
+    return res.status(500).json({ error: err?.message || 'Failed to fetch MOPH public price list' });
+  }
+});
+
+// LNDD ingredients lookup cache keyed by normalized query signature
+const lnddIngredientsCache = new Map<string, string>();
+const lnddIngredientsInflight = new Map<string, Promise<string>>();
+
+function normalizeLnddName(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9%]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function lnddRowSignature(name: string, dosage: string): string {
+  return `${normalizeLnddName(name)}|${dosage.trim().toUpperCase()}`;
+}
+
+function parseLnddSearchTable(html: string): Array<{
+  viewId: string;
+  atc: string;
+  name: string;
+  bg: string;
+  ingredients: string;
+  dosage: string;
+  form: string;
+  priceText: string;
+}> {
+  // Search results are <tr> rows whose cells link to /en/Drugs/view/<id>.
+  // The price <td> spans multiple lines, so the matches MUST use the 's'
+  // flag ('.' crosses newlines) — without it the row regex never matches.
+  const rows: Array<{
+    viewId: string; atc: string; name: string; bg: string; ingredients: string;
+    dosage: string; form: string; priceText: string;
+  }> = [];
+  const rowRe = /<tr>\s*<td><a href="\/en\/Drugs\/view\/(\d+)"[^>]*>(.*?)<\/a><\/td>(.*?)<\/tr>/gis;
+  let m: RegExpExecArray | null;
+  while ((m = rowRe.exec(html)) !== null) {
+    const viewId = m[1];
+    const atc = stripTrailingComma(m[2].replace(/<[^>]+>/g, '')) || '';
+    const rest = m[3];
+    const cells = Array.from(rest.matchAll(/<td[^>]*>(.*?)<\/td>/gis)).map(c => c[1]);
+    if (cells.length < 6) continue;
+    const cellText = (idx: number) => stripTrailingComma(cells[idx].replace(/<[^>]+>/g, '')) || '';
+    rows.push({
+      viewId,
+      atc,
+      name: cellText(0),
+      bg: cellText(1),
+      ingredients: cellText(2),
+      dosage: cellText(3),
+      form: cellText(4),
+      priceText: cellText(5),
+    });
+  }
+  return rows;
+}
+
+async function findLnddIngredient(name: string, dosage: string, form: string): Promise<string> {
+  const sig = lnddRowSignature(name, dosage);
+  if (lnddIngredientsCache.has(sig)) return lnddIngredientsCache.get(sig) || '';
+
+  const existing = lnddIngredientsInflight.get(sig);
+  if (existing) return existing;
+
+  const inflight = (async () => {
+    const body = new URLSearchParams();
+    body.append('data[Drug][name]', name);
+
+    const searchRes = await fetch(MOPH_LNDD_SEARCH, {
+      method: 'POST',
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(30000),
+    });
+    const html = searchRes.ok ? await searchRes.text() : '';
+    const rows = parseLnddSearchTable(html);
+
+    const targetName = normalizeLnddName(name);
+    const targetDosage = dosage.trim().toUpperCase();
+    const targetForm = form.trim().toUpperCase();
+
+    let matchedIngredients = '';
+    let bestScore = -1;
+    for (const row of rows) {
+      if (!row.ingredients) continue;
+      let score = 0;
+      const rowName = normalizeLnddName(row.name);
+      if (rowName === targetName) score += 100;
+      else if (rowName.includes(targetName) || targetName.includes(rowName)) score += 50;
+      else continue;
+      if (row.dosage.trim().toUpperCase() === targetDosage) score += 20;
+      if (row.form.trim().toUpperCase() === targetForm) score += 10;
+      if (score > bestScore) {
+        bestScore = score;
+        matchedIngredients = row.ingredients;
+      }
+    }
+
+    lnddIngredientsCache.set(sig, matchedIngredients);
+    return matchedIngredients;
+  })();
+  lnddIngredientsInflight.set(sig, inflight);
+  void inflight.finally(() => lnddIngredientsInflight.delete(sig));
+  return inflight;
+}
+
+// POST /api/moph/lndd-ingredients
+// body: { items: [{ name, dosage, form }] } -> resolves Ingredients per item
+// via one LNDD search per unique (name|dosage). Cached in memory.
+// Lookups run concurrently to keep imports fast; batches are capped per request.
+const MAX_LNDD_ITEMS_PER_REQUEST = 100;
+const LNDD_LOOKUP_CONCURRENCY = 10;
+const LNDD_POLITENESS_DELAY_MS = 50;
+
+app.post('/api/moph/lndd-ingredients', async (req, res) => {
+  try {
+    const items: Array<{ name?: string; dosage?: string; form?: string }> =
+      Array.isArray(req.body?.items) ? req.body.items : [];
+    if (items.length === 0) {
+      return res.status(400).json({ error: 'Missing items array' });
+    }
+
+    const batch = items.slice(0, MAX_LNDD_ITEMS_PER_REQUEST);
+    const results: Array<{ name: string; dosage: string; form: string; ingredients: string }> = [];
+
+    let cursor = 0;
+    async function worker() {
+      while (cursor < batch.length) {
+        const item = batch[cursor++];
+        const name = String(item?.name || '').trim();
+        const dosage = String(item?.dosage || '').trim();
+        const form = String(item?.form || '').trim();
+        if (!name) {
+          results.push({ name, dosage, form, ingredients: '' });
+          continue;
+        }
+        try {
+          const ingredients = await findLnddIngredient(name, dosage, form);
+          results.push({ name, dosage, form, ingredients });
+        } catch (e: any) {
+          console.warn(`LNDD ingredients lookup failed for ${name}:`, e?.message || e);
+          results.push({ name, dosage, form, ingredients: '' });
+        }
+        // Be polite to the public site between searches (parallelized, so short delay).
+        await new Promise(r => setTimeout(r, LNDD_POLITENESS_DELAY_MS));
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(LNDD_LOOKUP_CONCURRENCY, batch.length) }, () => worker())
+    );
+
+    return res.json(results);
+  } catch (err: any) {
+    console.error('MOPH LNDD ingredients error:', err?.message || err);
+    return res.status(500).json({ error: err?.message || 'Failed to fetch ingredients from MOPH database' });
   }
 });
 

@@ -37,6 +37,7 @@ import { SectionRestoreButton } from '../common/SectionRestoreButton';
 interface StockViewProps {
   onViewScientific: (product: Product) => void;
   onOpenCSVImport: () => void;
+  onOpenMOPHUpdater: () => void;
 }
 
 type SortKey = 'code' | 'barcode' | 'name' | 'presentation' | 'category' | 'stockQuantity' | 'expiryDate' | 'priceUSD' | 'agent';
@@ -99,7 +100,7 @@ const parseExpiryDate = (dateStr?: string): { date: Date | null; displayMMYYYY: 
   return { date: null, displayMMYYYY: str };
 };
 
-export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCSVImport }) => {
+export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCSVImport, onOpenMOPHUpdater }) => {
   const {
     products,
     addProduct,
@@ -656,6 +657,14 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
               className="text-xs border border-gray-300 dark:border-slate-700 px-2.5 py-1 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 rounded cursor-pointer font-medium text-gray-700 dark:text-gray-200"
             >
               Import CSV
+            </button>
+            <button
+              onClick={onOpenMOPHUpdater}
+              className="text-xs border border-teal-300 dark:border-teal-700/60 px-2.5 py-1 bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/50 rounded cursor-pointer font-medium text-teal-700 dark:text-teal-300 flex items-center gap-1.5 transition-colors shadow-2xs"
+              title="Update prices directly from MOPH MediTrack database"
+            >
+              <Globe className="h-3.5 w-3.5" />
+              Update from MOPH
             </button>
             <button
               onClick={() => {

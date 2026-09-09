@@ -1677,6 +1677,18 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setProducts(mergedProducts);
     OfflineStorage.saveProducts(mergedProducts);
 
+    // LAN sync: broadcast all imported/updated products so connected PCs converge.
+    try {
+      const syncedChanged = newProducts.concat(
+        Array.from(currentProductsMap.values()).filter(p =>
+          products.some(prev => prev.id === p.id && prev.updatedAt !== p.updatedAt)
+        )
+      );
+      if (syncedChanged.length > 0) {
+        syncEngine.broadcast('STOCK_MUTATION', syncedChanged);
+      }
+    } catch (e) {}
+
     const totalImported = newProducts.length + updatedCount;
     const skippedMsg = skippedLowerPricesCount > 0
       ? ` (${skippedLowerPricesCount} price decrease${skippedLowerPricesCount > 1 ? 's' : ''} preserved with red decrease indicator)`

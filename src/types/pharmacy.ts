@@ -279,6 +279,7 @@ export type RibbonTab =
   | 'purchase'
   | 'supplier'
   | 'customer'
+  | 'finance'
   | 'reports'
   | 'scientifics'
   | 'logs'
