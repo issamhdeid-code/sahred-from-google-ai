@@ -6,6 +6,14 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import * as XLSX from 'xlsx';
+import {
+  stripTrailingComma,
+  parseXlsPriceNumber,
+  lnddRowSignature,
+  parseLnddSearchTable,
+  pickBestIngredient,
+  MOPHPriceListRow,
+} from './src/services/mophParsers';
 
 dotenv.config();
 
@@ -322,34 +330,6 @@ const MOPH_LNDD_SEARCH = 'https://www.moph.gov.lb/en/Drugs/index/3/4848';
 
 let priceListCache: { ts: number; rows: MOPHPriceListRow[] } | null = null;
 
-interface MOPHPriceListRow {
-  code: number | string;
-  registrationNumber: string;
-  brandName: string;
-  strength: string;
-  presentation: string;
-  form: string;
-  agent: string;
-  manufacturer: string;
-  country: string;
-  publicPriceLBP: number | null;
-  pharmacistMargin: number | null;
-  stratum: string;
-}
-
-function stripTrailingComma(text: string): string {
-  return text.replace(/[,\s]+$/, '').trim();
-}
-
-function parseXlsPriceNumber(val: unknown): number | null {
-  if (val === undefined || val === null) return null;
-  if (typeof val === 'number') return isFinite(val) ? val : null;
-  const cleaned = stripTrailingComma(String(val)).replace(/,/g, '').trim();
-  if (!cleaned) return null;
-  const num = Number(cleaned);
-  return isFinite(num) ? num : null;
-}
-
 async function findLatestMarketedXlsUrl(): Promise<string> {
   const pageRes = await fetch(MOPH_PRICELIST_PAGE, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -432,56 +412,64 @@ app.get('/api/moph/price-list', async (req, res) => {
   }
 });
 
-// LNDD ingredients lookup cache keyed by normalized query signature
+// LNDD ingredients lookup cache keyed by normalized query signature,
+// persisted to disk so app/PC restarts don't re-hit the public site.
 const lnddIngredientsCache = new Map<string, string>();
 const lnddIngredientsInflight = new Map<string, Promise<string>>();
 
-function normalizeLnddName(name: string): string {
-  return name.toUpperCase().replace(/[^A-Z0-9%]/g, ' ').replace(/\s+/g, ' ').trim();
+const LNDD_CACHE_FILE = process.env.LNDD_CACHE_FILE
+  || (process.env.NODE_ENV === 'production'
+    ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'Lebanon Pharma Pro', 'lndd-ingredients-cache.json')
+    : path.join(process.cwd(), '.cache', 'lndd-ingredients-cache.json'));
+
+let lnddSaveTimer: NodeJS.Timeout | null = null;
+function scheduleLnddCacheSave() {
+  if (lnddSaveTimer) clearTimeout(lnddSaveTimer);
+  lnddSaveTimer = setTimeout(() => {
+    try {
+      fs.mkdirSync(path.dirname(LNDD_CACHE_FILE), { recursive: true });
+      fs.writeFileSync(LNDD_CACHE_FILE, JSON.stringify(Object.fromEntries(lnddIngredientsCache)));
+    } catch (e) {
+      console.warn('Failed to persist LNDD ingredients cache:', e?.message || e);
+    }
+  }, 1000);
 }
 
-function lnddRowSignature(name: string, dosage: string): string {
-  return `${normalizeLnddName(name)}|${dosage.trim().toUpperCase()}`;
-}
-
-function parseLnddSearchTable(html: string): Array<{
-  viewId: string;
-  atc: string;
-  name: string;
-  bg: string;
-  ingredients: string;
-  dosage: string;
-  form: string;
-  priceText: string;
-}> {
-  // Search results are <tr> rows whose cells link to /en/Drugs/view/<id>.
-  // The price <td> spans multiple lines, so the matches MUST use the 's'
-  // flag ('.' crosses newlines) — without it the row regex never matches.
-  const rows: Array<{
-    viewId: string; atc: string; name: string; bg: string; ingredients: string;
-    dosage: string; form: string; priceText: string;
-  }> = [];
-  const rowRe = /<tr>\s*<td><a href="\/en\/Drugs\/view\/(\d+)"[^>]*>(.*?)<\/a><\/td>(.*?)<\/tr>/gis;
-  let m: RegExpExecArray | null;
-  while ((m = rowRe.exec(html)) !== null) {
-    const viewId = m[1];
-    const atc = stripTrailingComma(m[2].replace(/<[^>]+>/g, '')) || '';
-    const rest = m[3];
-    const cells = Array.from(rest.matchAll(/<td[^>]*>(.*?)<\/td>/gis)).map(c => c[1]);
-    if (cells.length < 6) continue;
-    const cellText = (idx: number) => stripTrailingComma(cells[idx].replace(/<[^>]+>/g, '')) || '';
-    rows.push({
-      viewId,
-      atc,
-      name: cellText(0),
-      bg: cellText(1),
-      ingredients: cellText(2),
-      dosage: cellText(3),
-      form: cellText(4),
-      priceText: cellText(5),
-    });
+try {
+  if (fs.existsSync(LNDD_CACHE_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(LNDD_CACHE_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') {
+      for (const [k, v] of Object.entries(raw)) lnddIngredientsCache.set(k, String(v));
+    }
   }
-  return rows;
+} catch (e) {
+  console.warn('Failed to load LNDD ingredients cache:', e?.message || e);
+}
+
+// The LNDD search only matches substring tokens in the market database, and
+// rejects multi-word queries (e.g. "AMOXIL 250" returns nothing). Build a small
+// ordered list of safer terms to try: exact name, name minus trailing numbers/
+// units, then each alphabetic word of the name.
+function candidateSearchTerms(name: string): string[] {
+  const out: string[] = [];
+  const norm = name.trim();
+  if (!norm) return out;
+  out.push(norm);
+
+  const stripped = norm
+    .replace(/\b\d+(?:[.,]\d+)?\s*(?:MG|MCG|G|IU|ML|UI|%)\b/gi, '')
+    .replace(/\s+/, ' ')
+    .trim();
+  if (stripped && stripped !== norm) out.push(stripped);
+
+  const tokens = norm.split(/[\s/*,+()&]+/g)
+    .map(t => t.trim())
+    .filter(t => /^[A-Za-z]{3,}$/.test(t));
+  for (const t of tokens) {
+    if (t !== norm && t !== stripped) out.push(t);
+  }
+
+  return Array.from(new Set(out)).slice(0, 3);
 }
 
 async function findLnddIngredient(name: string, dosage: string, form: string): Promise<string> {
@@ -492,41 +480,32 @@ async function findLnddIngredient(name: string, dosage: string, form: string): P
   if (existing) return existing;
 
   const inflight = (async () => {
-    const body = new URLSearchParams();
-    body.append('data[Drug][name]', name);
+    let matched = '';
+    for (const term of candidateSearchTerms(name)) {
+      const termSig = lnddRowSignature(term, dosage);
+      if (lnddIngredientsCache.has(termSig)) {
+        matched = lnddIngredientsCache.get(termSig) || '';
+      } else {
+        const body = new URLSearchParams();
+        body.append('data[Drug][name]', term);
 
-    const searchRes = await fetch(MOPH_LNDD_SEARCH, {
-      method: 'POST',
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      signal: AbortSignal.timeout(30000),
-    });
-    const html = searchRes.ok ? await searchRes.text() : '';
-    const rows = parseLnddSearchTable(html);
-
-    const targetName = normalizeLnddName(name);
-    const targetDosage = dosage.trim().toUpperCase();
-    const targetForm = form.trim().toUpperCase();
-
-    let matchedIngredients = '';
-    let bestScore = -1;
-    for (const row of rows) {
-      if (!row.ingredients) continue;
-      let score = 0;
-      const rowName = normalizeLnddName(row.name);
-      if (rowName === targetName) score += 100;
-      else if (rowName.includes(targetName) || targetName.includes(rowName)) score += 50;
-      else continue;
-      if (row.dosage.trim().toUpperCase() === targetDosage) score += 20;
-      if (row.form.trim().toUpperCase() === targetForm) score += 10;
-      if (score > bestScore) {
-        bestScore = score;
-        matchedIngredients = row.ingredients;
+        const searchRes = await fetch(MOPH_LNDD_SEARCH, {
+          method: 'POST',
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+          signal: AbortSignal.timeout(30000),
+        });
+        const html = searchRes.ok ? await searchRes.text() : '';
+        const rows = parseLnddSearchTable(html);
+        matched = pickBestIngredient(rows, term, dosage, form);
+        lnddIngredientsCache.set(termSig, matched);
       }
+      if (matched) break;
     }
 
-    lnddIngredientsCache.set(sig, matchedIngredients);
-    return matchedIngredients;
+    lnddIngredientsCache.set(sig, matched);
+    scheduleLnddCacheSave();
+    return matched;
   })();
   lnddIngredientsInflight.set(sig, inflight);
   void inflight.finally(() => lnddIngredientsInflight.delete(sig));

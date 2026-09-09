@@ -100,6 +100,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
 
   const [applyResult, setApplyResult] = useState<{ updated: number; skipped: number } | null>(null);
   const [importResult, setImportResult] = useState<{ imported: number; errors: string[]; skippedLowerPricesCount?: number } | null>(null);
+  const [applyPriceDecreases, setApplyPriceDecreases] = useState(false);
 
   const productCodeMap = useMemo(() => {
     const map = new Map<string, { id: string; code: string; priceLBP: number; priceUSD: number }>();
@@ -298,6 +299,14 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, previewTab, importSearch]);
 
+  // Progressive background fill: while the import tab is open, keep refilling the
+  // next unresolved batch every few seconds until the whole visible list has ingredients.
+  useEffect(() => {
+    if (step !== 'preview' || previewTab !== 'import-items') return;
+    const id = setInterval(() => { fetchVisibleIngredients(); }, 2500);
+    return () => clearInterval(id);
+  }, [step, previewTab, fetchVisibleIngredients]);
+
   const handleApplyUpdates = useCallback(async () => {
     const toUpdate = matchedItems.filter(item => item.selected);
     if (toUpdate.length === 0) return;
@@ -315,10 +324,10 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
       const updates: Partial<Product> = {};
       let changed = false;
 
-      // Price change (skip price decreases to preserve selling price)
+      // Price change (decreases are skipped unless the user opted in)
       if (item.mophPriceLBP > 0 && item.mophPriceLBP !== item.currentPriceLBP) {
         const isDecrease = item.currentPriceLBP > 0 && item.mophPriceLBP < item.currentPriceLBP;
-        if (!isDecrease) {
+        if (!isDecrease || applyPriceDecreases) {
           updates.priceLBP = item.mophPriceLBP;
           updates.priceUSD = item.mophPriceUSD;
           changed = true;
@@ -352,7 +361,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
 
     setApplyResult({ updated, skipped });
     setStep('done');
-  }, [matchedItems, products, updateProduct]);
+  }, [matchedItems, products, updateProduct, applyPriceDecreases]);
 
   const handleImportSelected = useCallback(async () => {
     const toImport = newImportItems.filter(item => item.selected);
@@ -447,6 +456,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
 
   const selectableImportCount = useMemo(() => filteredImportItems.length, [filteredImportItems]);
   const selectedImportCount = useMemo(() => newImportItems.filter(it => it.selected).length, [newImportItems]);
+  const resolvedIngredientCount = useMemo(() => newImportItems.filter(it => it.ingredients).length, [newImportItems]);
 
   return (
     <DesktopWindow
@@ -788,7 +798,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                                         'text-slate-400'
                                       }`}>
                                         {isIncrease ? '+' : ''}{pctChange}%
-                                        {isDecrease && (
+                                        {isDecrease && !applyPriceDecreases && (
                                           <span className="text-[10px] ml-1 text-slate-400" title="Decrease skipped to preserve current price">
                                             (skip)
                                           </span>
@@ -808,15 +818,24 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                   )}
 
                   {/* Summary & Actions */}
-                  <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 flex items-center justify-between">
+                  <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 flex items-center justify-between gap-3 flex-wrap">
                     <div className="text-[11px] text-slate-600 dark:text-slate-400">
                       <span className="font-bold text-slate-800 dark:text-slate-200">{selectedCount}</span> items selected for update
-                      {matchedItems.filter(i => i.selected && i.mophPriceLBP > 0 && i.currentPriceLBP > 0 && i.mophPriceLBP < i.currentPriceLBP).length > 0 && (
+                      {!applyPriceDecreases && matchedItems.filter(i => i.selected && i.mophPriceLBP > 0 && i.currentPriceLBP > 0 && i.mophPriceLBP < i.currentPriceLBP).length > 0 && (
                         <span className="text-amber-600 dark:text-amber-400 ml-2">
                           (price decreases will be skipped to preserve selling price)
                         </span>
                       )}
                     </div>
+                    <label className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={applyPriceDecreases}
+                        onChange={(e) => setApplyPriceDecreases(e.target.checked)}
+                        className="rounded text-teal-600 focus:ring-teal-500 border-gray-300 cursor-pointer"
+                      />
+                      Apply MOPH price even when lower
+                    </label>
                     <div className="flex gap-2">
                       <button
                         type="button"
@@ -855,9 +874,13 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                       </h3>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         {newImportItems.length} marketed MOPH drugs (official price list) not in your stock. New drugs are added with 0 quantity, blank expiry and no barcode (category "drug").
-                        {ingredientsLoading && (
+                        {ingredientsLoading ? (
                           <span className="text-teal-600 dark:text-teal-400 block mt-0.5">
-                            Fetching ingredients for the visible {MAX_INGREDIENTS_BATCH} drugs from MOPH...
+                            Fetching ingredients ({resolvedIngredientCount}/{newImportItems.length})...
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 block mt-0.5">
+                            Ingredients: {resolvedIngredientCount} resolved (auto-filled in the background while this tab is open).
                           </span>
                         )}
                       </p>
