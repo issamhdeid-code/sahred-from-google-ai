@@ -6,13 +6,12 @@
 
 ## Git state (last known)
 - `origin` = https://github.com/issamhdeid-code/sahred-from-google-ai
-- Local `main` == `origin/main` == `4379d31`. Working tree was clean at close of the MOPH session.
-- **Current session: performance work is IMPLEMENTED but NOT committed.** `git status` shows:
-  - Modified: `package.json`, `package-lock.json` (`@tanstack/react-virtual` added), `src/components/sale/SaleView.tsx`,
-    `src/components/scientifics/ScientificsView.tsx`, `src/components/stock/StockView.tsx`, `src/context/PharmacyContext.tsx`
-  - Untracked: `src/hooks/useDebounce.ts`, `WORKLOG.md` (and pre-existing uncommitted `AGENTS.md` edit from earlier session)
+- Local `main` == `origin/main` == `e55e3f5` (pushed). Working tree CLEAN after commit
+  `feat(perf): virtualize lists, debounce search, stabilize stock grid, integer LBP`
+  (23 files: perf work, stock grid fix, LBP integer amounts, build-data-policy bump, WORKLOG + AGENTS.md).
 - History note: remote was rewritten to a single "Initial commit" `61d7b79`; both subsequent commits
   (`74918fb`, `4379d31`) were built on top of it. Do not rebase --force against it.
+  Latest: `e55e3f5` on top of `4379d31`.
 
 ## Environment / commands
 - `npm run lint` — `tsc --noEmit` (only type-check). GREEN for the current performance changes.
