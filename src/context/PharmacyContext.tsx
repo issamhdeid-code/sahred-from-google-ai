@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Papa from 'papaparse';
 import {
   Product,
@@ -29,6 +29,7 @@ import {
 } from '../services/scientificDataService';
 import { idbStorage } from '../services/indexedDbStorage';
 import { backupToGoogleDrive, getGoogleDriveClientId } from '../services/googleDriveBackup';
+import { formatLBPValue } from '../utils/priceUtils';
 
 // Settings fields that describe the pharmacy's shared business data and must be
 // identical on every terminal. Everything else (theme, dark mode, font size, this
@@ -344,7 +345,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [exchangeRate]);
 
   const formatLBP = useCallback((amount: number): string => {
-    return `${Math.round(amount).toLocaleString()} L.L.`;
+    return `${formatLBPValue(amount)} L.L.`;
   }, []);
 
   const formatUSD = useCallback((amount: number): string => {
@@ -913,7 +914,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             } catch(e) {}
             return updated;
     });
-    addNotification('Exchange Rate Updated', `New rate: ${rate.toLocaleString()} L.L. per 1 USD`, 'system', 'info');
+    addNotification('Exchange Rate Updated', `New rate: ${formatLBPValue(rate)} L.L. per 1 USD`, 'system', 'info');
   };
 
   const toggleDarkMode = () => {
@@ -1400,7 +1401,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     addNotification(
       'Drug Price Updated',
-      `Code: ${trimmedCode} (${product.name}) updated to ${newPriceLBP.toLocaleString()} L.L. ($${calculatedUSD})`,
+      `Code: ${trimmedCode} (${product.name}) updated to ${formatLBPValue(newPriceLBP)} L.L. ($${calculatedUSD})`,
       'inventory',
       'success'
     );
@@ -1410,7 +1411,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       action: 'DRUG_PRICE_UPDATED',
       level: 'info',
       title: `Drug Price Adjusted (${trimmedCode})`,
-      description: `New price: ${newPriceLBP.toLocaleString()} L.L. ($${calculatedUSD}) for ${product.name}.`,
+      description: `New price: ${formatLBPValue(newPriceLBP)} L.L. ($${calculatedUSD}) for ${product.name}.`,
       entityId: product.id,
       entityType: 'product',
       details: {
@@ -1425,7 +1426,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     return {
       success: true,
-      message: `Price for "${product.name}" (${trimmedCode}) successfully updated to ${newPriceLBP.toLocaleString()} L.L. ($${calculatedUSD})`
+      message: `Price for "${product.name}" (${trimmedCode}) successfully updated to ${formatLBPValue(newPriceLBP)} L.L. ($${calculatedUSD})`
     };
   };
 
@@ -2706,83 +2707,95 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addNotification('Demo Reset', 'Reset all modules to initial Lebanese demo records.', 'system', 'info');
   };
 
+  const contextValue = useMemo(() => ({
+    currentUser,
+    login,
+    logout,
+    users,
+    addUser,
+    updateUser,
+    deleteUser,
+
+    activeTab,
+    setActiveTab,
+
+    exchangeRate,
+    setExchangeRate,
+    toLBP,
+    toUSD,
+    formatLBP,
+    formatUSD,
+
+    products,
+    addProduct,
+    updateProduct,
+    bulkUpdateProducts,
+    bulkDeleteProducts,
+    deleteProduct,
+    deleteAllProducts,
+    updateDrugPriceByCode,
+    clearPriceChangeIndicators,
+    importProductsFromCSV,
+    searchScientificDataOnline,
+    enrichProductWithOnlineScientifics,
+    enrichAllProductsOnline,
+    isSearchingScientifics,
+    standardizeAllScientifics,
+
+    sales,
+    recordSale,
+    updateSale,
+    deleteSale,
+
+    purchases,
+    recordPurchase,
+    updatePurchase,
+    deletePurchase,
+    suppliers,
+    addSupplier,
+    updateSupplier,
+
+    customers,
+    addCustomer,
+    updateCustomer,
+
+    settings,
+    updateSettings,
+    toggleDarkMode,
+
+    notifications,
+    unreadCount,
+    dismissNotification,
+    markAllNotificationsRead,
+    addNotification,
+    syncStatus,
+    reconnectSync: connectSyncEngine,
+    activeSessions,
+
+    logs,
+    addLog,
+    clearLogs,
+    exportLogs,
+
+    exportBackup,
+    restoreBackup,
+    resetDemoData,
+  }), [
+    currentUser, users, activeTab, exchangeRate, products, sales, purchases, suppliers, customers,
+    settings, notifications, syncStatus, activeSessions, logs, isSearchingScientifics,
+    login, logout, addUser, updateUser, deleteUser, setActiveTab, setExchangeRate,
+    toLBP, toUSD, formatLBP, formatUSD,
+    addProduct, updateProduct, bulkUpdateProducts, bulkDeleteProducts, deleteProduct, deleteAllProducts,
+    updateDrugPriceByCode, clearPriceChangeIndicators, importProductsFromCSV,
+    searchScientificDataOnline, enrichProductWithOnlineScientifics, enrichAllProductsOnline, standardizeAllScientifics,
+    recordSale, updateSale, deleteSale, recordPurchase, updatePurchase, deletePurchase,
+    addSupplier, updateSupplier, addCustomer, updateCustomer, updateSettings, toggleDarkMode,
+    unreadCount, dismissNotification, markAllNotificationsRead, addNotification,
+    connectSyncEngine, addLog, clearLogs, exportLogs, exportBackup, restoreBackup, resetDemoData,
+  ]);
+
   return (
-    <PharmacyContext.Provider
-      value={{
-        currentUser,
-        login,
-        logout,
-        users,
-        addUser,
-        updateUser,
-        deleteUser,
-
-        activeTab,
-        setActiveTab,
-
-        exchangeRate,
-        setExchangeRate,
-        toLBP,
-        toUSD,
-        formatLBP,
-        formatUSD,
-
-        products,
-        addProduct,
-        updateProduct,
-        bulkUpdateProducts,
-        bulkDeleteProducts,
-        deleteProduct,
-        deleteAllProducts,
-        updateDrugPriceByCode,
-        clearPriceChangeIndicators,
-        importProductsFromCSV,
-        searchScientificDataOnline,
-        enrichProductWithOnlineScientifics,
-        enrichAllProductsOnline,
-        isSearchingScientifics,
-        standardizeAllScientifics,
-
-        sales,
-        recordSale,
-        updateSale,
-        deleteSale,
-
-        purchases,
-        recordPurchase,
-        updatePurchase,
-        deletePurchase,
-        suppliers,
-        addSupplier,
-        updateSupplier,
-
-        customers,
-        addCustomer,
-        updateCustomer,
-
-        settings,
-        updateSettings,
-        toggleDarkMode,
-
-        notifications,
-        unreadCount,
-        dismissNotification,
-        markAllNotificationsRead,
-        addNotification,
-        syncStatus,
-        reconnectSync: connectSyncEngine,
-        activeSessions,
-
-        logs,
-        addLog,
-        clearLogs,
-        exportLogs,
-
-        exportBackup,
-        restoreBackup,
-        resetDemoData,
-      }}
-    >
+    <PharmacyContext.Provider value={contextValue}>
       {children}
     </PharmacyContext.Provider>
   );

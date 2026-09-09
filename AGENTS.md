@@ -1,5 +1,10 @@
 # AGENTS.md
 
+## Session Resume
+Read [WORKLOG.md](WORKLOG.md) when resuming work in a fresh session — it tracks the latest work
+state, git pointer, verified commands, and open items. The project folder was renamed to
+`lebanon-pharma-pro`; reopen opencode there.
+
 ## Project Overview
 Lebanon Pharma Pro — an Electron desktop pharmacy POS/inventory app (React 19 + Vite + Tailwind), offline-first, with optional live LAN sync between one "Main PC" and one or more "Secondary PCs" over Socket.IO. There is no backend database; all data lives in the browser's `localStorage`/`IndexedDB` inside the Electron renderer.
 

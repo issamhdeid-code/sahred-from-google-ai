@@ -31,6 +31,7 @@ import {
   type MOPHPriceRecord,
   type MOPHPriceListRow,
 } from '../../services/mophApiService';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface MOPHPriceUpdaterModalProps {
   onClose: () => void;
@@ -779,14 +780,14 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                                     )}
                                   </td>
                                   <td className="px-3 py-2 text-right font-medium text-slate-700 dark:text-slate-300">
-                                    {item.currentPriceLBP.toLocaleString()}
+                                    {formatLBPValue(item.currentPriceLBP)}
                                   </td>
                                   <td className={`px-3 py-2 text-right font-bold ${
                                     isIncrease ? 'text-emerald-600 dark:text-emerald-400' :
                                     isDecrease ? 'text-amber-600 dark:text-amber-400' :
                                     'text-slate-700 dark:text-slate-300'
                                   }`}>
-                                    {item.mophPriceLBP > 0 ? item.mophPriceLBP.toLocaleString() : (
+                                    {item.mophPriceLBP > 0 ? formatLBPValue(item.mophPriceLBP) : (
                                       <span className="text-slate-400 font-normal">N/A</span>
                                     )}
                                   </td>
@@ -988,7 +989,7 @@ export const MOPHPriceUpdaterModal: React.FC<MOPHPriceUpdaterModalProps> = ({ on
                               <td className="px-3 py-2 text-slate-600 dark:text-slate-300 text-[11px] max-w-[120px] truncate">{item.presentation}</td>
                               <td className="px-3 py-2 text-slate-600 dark:text-slate-300 text-[11px]">{item.form}</td>
                               <td className="px-3 py-2 text-right font-bold text-slate-700 dark:text-slate-300">
-                                {item.priceLBP > 0 ? item.priceLBP.toLocaleString() : <span className="text-slate-400 font-normal">N/A</span>}
+                                {item.priceLBP > 0 ? formatLBPValue(item.priceLBP) : <span className="text-slate-400 font-normal">N/A</span>}
                               </td>
                               <td className="px-3 py-2 text-slate-500 dark:text-slate-400 max-w-[140px] truncate text-[11px]">{item.agent || '—'}</td>
                               <td className="px-3 py-2 text-right text-slate-600 dark:text-slate-300 text-[11px]">

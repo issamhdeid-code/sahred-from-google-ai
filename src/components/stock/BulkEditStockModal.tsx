@@ -19,6 +19,7 @@ import {
 import { usePharmacy } from '../../context/PharmacyContext';
 import { Product, ProductCategory } from '../../types/pharmacy';
 import { DesktopWindow } from '../common/DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface BulkEditStockModalProps {
   selectedProducts: Product[];
@@ -491,7 +492,7 @@ export const BulkEditStockModal: React.FC<BulkEditStockModalProps> = ({
                       <option value="fixed_add_usd">Add/Subtract Fixed USD ($)</option>
                       <option value="set_fixed_usd">Set Exact Fixed USD ($)</option>
                       <option value="recalc_lbp_from_usd">
-                        Recalculate LBP from Current USD ({exchangeRate.toLocaleString()} LBP/$)
+                        Recalculate LBP from Current USD ({formatLBPValue(exchangeRate)} LBP/$)
                       </option>
                     </select>
                   </div>
@@ -526,7 +527,7 @@ export const BulkEditStockModal: React.FC<BulkEditStockModalProps> = ({
                   <Sparkles className="h-3 w-3 text-teal-500 shrink-0" />
                   <span>
                     When USD prices are updated, corresponding LBP prices are automatically synchronized
-                    at current official rate ({exchangeRate.toLocaleString()} LBP/$).
+                    at current official rate ({formatLBPValue(exchangeRate)} LBP/$).
                   </span>
                 </div>
               </div>
@@ -859,7 +860,7 @@ export const BulkEditStockModal: React.FC<BulkEditStockModalProps> = ({
                             ${updates.priceUSD.toFixed(2)}
                           </span>
                           <span className="text-[10px] text-slate-400">
-                            ({updates.priceLBP?.toLocaleString()} LBP)
+                            ({formatLBPValue(updates.priceLBP ?? 0)} LBP)
                           </span>
                         </div>
                       )}

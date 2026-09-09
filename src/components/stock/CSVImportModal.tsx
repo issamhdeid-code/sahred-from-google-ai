@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { usePharmacy } from '../../context/PharmacyContext';
 import { DesktopWindow } from '../common/DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface CSVImportModalProps {
   onClose: () => void;
@@ -111,7 +112,7 @@ export const CSVImportModal: React.FC<CSVImportModalProps> = ({ onClose, section
               code, Name, Ingredients, Dosage, Presentation, Form, Price in LBP, Agent, Pharmacist Margin
             </code>
             <p className="mt-1.5 text-[11px] text-blue-700 dark:text-blue-300">
-              * All medicines imported will have category automatically set to <span className="font-bold">drug</span>, default stock quantity set to <span className="font-bold">0</span> with blank expiry, and USD prices calculated via current rate ($1 = {exchangeRate.toLocaleString()} L.L.).
+              * All medicines imported will have category automatically set to <span className="font-bold">drug</span>, default stock quantity set to <span className="font-bold">0</span> with blank expiry, and USD prices calculated via current rate ($1 = {formatLBPValue(exchangeRate)} L.L.).
             </p>
             <p className="mt-1 text-[11px] text-blue-700 dark:text-blue-300">
               * <span className="font-semibold">Price Safeguard:</span> If a new price in the CSV is lower than the existing price, the price update is skipped to preserve your current inventory value, while displaying the decrease indicator (red arrow and % change).

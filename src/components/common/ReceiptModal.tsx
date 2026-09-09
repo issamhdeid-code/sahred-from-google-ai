@@ -2,6 +2,7 @@ import React from 'react';
 import { Printer, X, CheckCircle, ShieldCheck } from 'lucide-react';
 import { SaleTransaction, PharmacySettings } from '../../types/pharmacy';
 import { DesktopWindow } from './DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface ReceiptModalProps {
   sale: SaleTransaction | null;
@@ -59,7 +60,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ sale, settings, onCl
             )}
             <div className="flex justify-between text-amber-700 dark:text-amber-400">
               <span>Applied Rate:</span>
-              <span className="font-bold">1$ = {sale.exchangeRate.toLocaleString()} L.L.</span>
+              <span className="font-bold">1$ = {formatLBPValue(sale.exchangeRate)} L.L.</span>
             </div>
           </div>
 
@@ -80,7 +81,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ sale, settings, onCl
                   </div>
                   <div className="flex justify-between text-[10px] text-slate-500 dark:text-slate-400">
                     <span>Code: {item.productCode}</span>
-                    <span>{item.totalLBP.toLocaleString()} L.L.</span>
+                    <span>{formatLBPValue(item.totalLBP)} L.L.</span>
                   </div>
                 </div>
               ))}
@@ -98,7 +99,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ sale, settings, onCl
             <div className="flex justify-between items-center text-sm font-bold">
               <span>Total Lebanese Pounds:</span>
               <span className="text-base text-slate-900 dark:text-slate-100">
-                {sale.totalLBP.toLocaleString()} L.L.
+                {formatLBPValue(sale.totalLBP)} L.L.
               </span>
             </div>
 
@@ -116,13 +117,13 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ sale, settings, onCl
               {sale.amountPaidLBP > 0 && (
                 <div className="flex justify-between">
                   <span>Cash L.L. Received:</span>
-                  <span>{sale.amountPaidLBP.toLocaleString()} L.L.</span>
+                  <span>{formatLBPValue(sale.amountPaidLBP)} L.L.</span>
                 </div>
               )}
               {sale.changeGivenLBP > 0 && (
                 <div className="flex justify-between font-bold text-emerald-700 dark:text-emerald-400">
                   <span>Change Given (L.L.):</span>
-                  <span>{sale.changeGivenLBP.toLocaleString()} L.L.</span>
+                  <span>{formatLBPValue(sale.changeGivenLBP)} L.L.</span>
                 </div>
               )}
               {sale.changeGivenUSD > 0 && (
@@ -134,7 +135,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ sale, settings, onCl
               {sale.writeOffUSD && sale.writeOffUSD > 0.001 ? (
                 <div className="flex justify-between font-bold text-rose-600 dark:text-rose-400 pt-1 border-t border-slate-200 dark:border-slate-700">
                   <span>Difference Written Off:</span>
-                  <span>-${sale.writeOffUSD.toFixed(2)} ({(sale.writeOffLBP || 0).toLocaleString()} L.L.)</span>
+                  <span>-${sale.writeOffUSD.toFixed(2)} ({formatLBPValue(sale.writeOffLBP || 0)} L.L.)</span>
                 </div>
               ) : null}
             </div>

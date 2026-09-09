@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Product } from '../../types/pharmacy';
 import { formatStockDisplay } from '../../utils/stockUtils';
-import { getPriceChangeInfoUSD, getPriceChangeInfoLBP } from '../../utils/priceUtils';
+import { getPriceChangeInfoUSD, getPriceChangeInfoLBP, formatLBPValue } from '../../utils/priceUtils';
 import { resolveStraightforwardScientificInfo } from '../../services/scientificDataService';
 import { DesktopWindow } from '../common/DesktopWindow';
 
@@ -241,7 +241,7 @@ export const DrugDetailsModal: React.FC<DrugDetailsModalProps> = ({
                 <span>Dual-Currency Pricing & Commercial Metrics</span>
               </div>
               <span className="text-[10px] text-slate-400">
-                Rate: {exchangeRate.toLocaleString()} L.L. / $
+                Rate: {formatLBPValue(exchangeRate)} L.L. / $
               </span>
             </div>
 
@@ -286,7 +286,7 @@ export const DrugDetailsModal: React.FC<DrugDetailsModalProps> = ({
                 </span>
                 <div className="flex items-baseline space-x-1.5 mt-0.5">
                   <span className="text-sm font-extrabold text-emerald-800 dark:text-emerald-200 block truncate">
-                    {product.priceLBP.toLocaleString()} L.L.
+                    {formatLBPValue(product.priceLBP)} L.L.
                   </span>
                   {(() => {
                     const changeLBP = getPriceChangeInfoLBP(product);
@@ -298,7 +298,7 @@ export const DrugDetailsModal: React.FC<DrugDetailsModalProps> = ({
                         }`}
                         title={
                           changeLBP.isSkippedDecrease
-                            ? `Lower CSV price (${changeLBP.importedPrice?.toLocaleString()} LBP) skipped; selling price preserved (-${changeLBP.percentFormatted}%)`
+                            ? `Lower CSV price (${formatLBPValue(changeLBP.importedPrice ?? 0)} LBP) skipped; selling price preserved (-${changeLBP.percentFormatted}%)`
                             : undefined
                         }
                       >
@@ -338,7 +338,7 @@ export const DrugDetailsModal: React.FC<DrugDetailsModalProps> = ({
                 <div className="flex items-center space-x-1.5">
                   <Info className="h-4 w-4 text-amber-600 shrink-0" />
                   <span>
-                    Lower price from imported CSV (${product.skippedDecreasedPriceUSD.toFixed(2)} / {product.skippedDecreasedPriceLBP?.toLocaleString()} L.L.) was skipped to preserve current selling price.
+                    Lower price from imported CSV (${product.skippedDecreasedPriceUSD.toFixed(2)} / {formatLBPValue(product.skippedDecreasedPriceLBP ?? 0)} L.L.) was skipped to preserve current selling price.
                   </span>
                 </div>
                 <span className="font-bold text-red-600 dark:text-red-400 flex items-center shrink-0 ml-2">

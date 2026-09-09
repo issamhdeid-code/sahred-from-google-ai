@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   BookOpen,
   Search,
@@ -20,8 +21,10 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { usePharmacy } from '../../context/PharmacyContext';
+import { useDebounce } from '../../hooks/useDebounce';
 import { Product } from '../../types/pharmacy';
 import { formatStockDisplay } from '../../utils/stockUtils';
+import { formatLBPValue } from '../../utils/priceUtils';
 import { SectionRestoreButton } from '../common/SectionRestoreButton';
 import {
   findInStockGenericAlternatives,
@@ -56,6 +59,7 @@ export const ScientificsView: React.FC<ScientificsViewProps> = ({
   }, [products]);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearchQuery = useDebounce(searchQuery, 250);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(() => {
     if (initialSelectedProduct && initialSelectedProduct.category === 'drug') {
       return initialSelectedProduct.id;
@@ -97,7 +101,7 @@ export const ScientificsView: React.FC<ScientificsViewProps> = ({
   }, [selectedProduct, products]);
 
   const filteredDrugs = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = debouncedSearchQuery.trim().toLowerCase();
     if (!q) return drugProducts;
     return drugProducts.filter((p) => {
       const nameMatch = (p.name || '').toLowerCase().includes(q);
@@ -107,7 +111,17 @@ export const ScientificsView: React.FC<ScientificsViewProps> = ({
       const genMatch = p.scientificInfo?.generics?.some((g) => (g || '').toLowerCase().includes(q));
       return nameMatch || codeMatch || ingMatch || indMatch || genMatch;
     });
-  }, [drugProducts, searchQuery]);
+  }, [drugProducts, debouncedSearchQuery]);
+
+  // Virtualize the drug sidebar list (renders only visible rows)
+  const drugListRef = useRef<HTMLDivElement | null>(null);
+  const drugListVirtualizer = useVirtualizer({
+    count: filteredDrugs.length,
+    getScrollElement: () => drugListRef.current,
+    estimateSize: () => 52,
+    overscan: 8,
+    getItemKey: (index) => filteredDrugs[index]?.id || index,
+  });
 
   const handleRefreshOnlineData = async () => {
     if (!selectedProduct) return;
@@ -283,55 +297,67 @@ export const ScientificsView: React.FC<ScientificsViewProps> = ({
         </div>
 
         {/* Drug list */}
-        <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-slate-800">
+        <div ref={drugListRef} className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-slate-800">
           {filteredDrugs.length === 0 ? (
             <div className="p-6 text-center text-xs text-gray-400">
               No registered medications found.
             </div>
           ) : (
-            filteredDrugs.map((prod) => {
-              const isSelected = selectedProduct?.id === prod.id;
-              return (
-                <button
-                  key={prod.id}
-                  onClick={() => setSelectedProductId(prod.id)}
-                  className={`w-full text-left p-2.5 transition-colors cursor-pointer ${
-                    isSelected
-                      ? 'bg-teal-50/90 border-l-3 border-teal-600 dark:bg-slate-800/80 text-teal-950 dark:text-teal-100 font-medium'
-                      : 'hover:bg-gray-50 dark:hover:bg-slate-800/40 text-slate-800 dark:text-slate-200'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs">{prod.name}</span>
-                    <span className="font-mono text-[10px] text-gray-400">
-                      {prod.code}
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-gray-500 dark:text-slate-400 truncate flex items-center justify-between gap-1">
-                    <span className="truncate">{prod.ingredients} • {prod.dosage}</span>
-                    {extractCleanMolecules(prod.ingredients || prod.name).length > 1 && (
-                      <span className="shrink-0 px-1 py-0.2 text-[9px] rounded bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
-                        Multi
+            <div style={{ height: drugListVirtualizer.getTotalSize(), position: 'relative' }}>
+              {drugListVirtualizer.getVirtualItems().map((virtualRow) => {
+                const prod = filteredDrugs[virtualRow.index];
+                const isSelected = selectedProduct?.id === prod.id;
+                return (
+                  <button
+                    key={prod.id}
+                    data-index={virtualRow.index}
+                    ref={drugListVirtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                    onClick={() => setSelectedProductId(prod.id)}
+                    className={`w-full text-left p-2.5 transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-teal-50/90 border-l-3 border-teal-600 dark:bg-slate-800/80 text-teal-950 dark:text-teal-100 font-medium'
+                        : 'hover:bg-gray-50 dark:hover:bg-slate-800/40 text-slate-800 dark:text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs">{prod.name}</span>
+                      <span className="font-mono text-[10px] text-gray-400">
+                        {prod.code}
                       </span>
-                    )}
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-[10px] text-gray-400">
-                    <span className="flex items-center space-x-1">
-                      <span>{prod.form}</span>
-                      {prod.scientificInfo?.onlineEnriched && (
-                        <span
-                          className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
-                          title={`Online enriched via ${prod.scientificInfo.onlineSource || 'online source'}`}
-                        />
+                    </div>
+                    <div className="text-[10px] text-gray-500 dark:text-slate-400 truncate flex items-center justify-between gap-1">
+                      <span className="truncate">{prod.ingredients} • {prod.dosage}</span>
+                      {extractCleanMolecules(prod.ingredients || prod.name).length > 1 && (
+                        <span className="shrink-0 px-1 py-0.2 text-[9px] rounded bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
+                          Multi
+                        </span>
                       )}
-                    </span>
-                    <span className="font-semibold text-blue-600 dark:text-blue-400">
-                      ${prod.priceUSD.toFixed(2)}
-                    </span>
-                  </div>
-                </button>
-              );
-            })
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[10px] text-gray-400">
+                      <span className="flex items-center space-x-1">
+                        <span>{prod.form}</span>
+                        {prod.scientificInfo?.onlineEnriched && (
+                          <span
+                            className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+                            title={`Online enriched via ${prod.scientificInfo.onlineSource || 'online source'}`}
+                          />
+                        )}
+                      </span>
+                      <span className="font-semibold text-blue-600 dark:text-blue-400">
+                        ${prod.priceUSD.toFixed(2)}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
       </div>
@@ -411,7 +437,7 @@ export const ScientificsView: React.FC<ScientificsViewProps> = ({
                       ${selectedProduct.priceUSD.toFixed(2)}
                     </div>
                     <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
-                      {selectedProduct.priceLBP.toLocaleString()} LBP
+                      {formatLBPValue(selectedProduct.priceLBP)} LBP
                     </div>
                     <div className="text-[10px] font-medium text-slate-400">
                       Stock: {formatStockDisplay(selectedProduct.stockQuantity, selectedProduct.isDivisible, selectedProduct.piecesPerBox, selectedProduct.pieceName)}
@@ -635,7 +661,7 @@ export const ScientificsView: React.FC<ScientificsViewProps> = ({
                               ${alt.priceUSD.toFixed(2)}
                             </div>
                             <div className="text-[10px] text-slate-500">
-                              {alt.priceLBP.toLocaleString()} L.L.
+                              {formatLBPValue(alt.priceLBP)} L.L.
                             </div>
                             <div className="mt-1">
                               <span className="inline-flex items-center space-x-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200">

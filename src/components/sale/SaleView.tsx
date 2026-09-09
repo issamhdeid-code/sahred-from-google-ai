@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { motion } from 'motion/react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Search,
   Plus,
@@ -24,8 +25,10 @@ import {
 } from 'lucide-react';
 import { usePharmacy } from '../../context/PharmacyContext';
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
+import { useDebounce } from '../../hooks/useDebounce';
 import { Product, CartItem, SaleTransaction, ProductCategory } from '../../types/pharmacy';
 import { formatStockDisplay } from '../../utils/stockUtils';
+import { formatLBPValue } from '../../utils/priceUtils';
 import { filterProductsByMultiWordQuery } from '../../utils/searchUtils';
 import { ReceiptModal } from '../common/ReceiptModal';
 import { SalesTransactionLog } from './SalesTransactionLog';
@@ -188,6 +191,156 @@ const ProductCardTitle: React.FC<ProductCardTitleProps> = ({
   );
 };
 
+interface ProductCardProps {
+  prod: Product;
+  index: number;
+  isFocused: boolean;
+  inCartBoxes: number;
+  inCartPieces: number;
+  onAdd: (prod: Product) => void;
+  onAddPiece: (prod: Product) => void;
+  onViewScientific: (prod: Product) => void;
+}
+
+const ProductCard = React.memo(function ProductCard({
+  prod,
+  index,
+  isFocused,
+  inCartBoxes,
+  inCartPieces,
+  onAdd,
+  onAddPiece,
+  onViewScientific,
+}: ProductCardProps) {
+  const isLow = prod.stockQuantity <= prod.minStockAlert;
+  const isOut = prod.stockQuantity <= 0;
+  const isInCart = inCartBoxes > 0 || inCartPieces > 0;
+  const totalInCartDisplay = inCartBoxes > 0 && inCartPieces > 0
+    ? `${inCartBoxes} bxs, ${inCartPieces} ${prod.pieceName || 'pcs'}`
+    : inCartBoxes > 0
+    ? `${inCartBoxes} ${inCartBoxes === 1 ? 'box' : 'boxes'}`
+    : `${inCartPieces} ${prod.pieceName || 'pcs'}`;
+
+  return (
+    <div
+      id={`product-card-${index}`}
+      onClick={() => onAdd(prod)}
+      role="button"
+      tabIndex={isOut ? -1 : 0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onAdd(prod);
+        }
+      }}
+      className={`group relative flex flex-col justify-between rounded-lg border p-3 transition-all select-none shadow-2xs ${
+        isFocused ? 'ring-2 ring-indigo-500 dark:ring-indigo-400 border-indigo-500 z-10' : ''
+      } ${
+        isOut
+          ? 'border-gray-200 bg-gray-50/70 opacity-60 dark:border-slate-800 dark:bg-slate-900/40 cursor-not-allowed'
+          : isInCart
+          ? 'border-teal-500 bg-teal-50/30 ring-1 ring-teal-500/30 hover:border-teal-600 hover:shadow-md active:scale-[0.985] dark:border-teal-500 dark:bg-teal-950/25 cursor-pointer'
+          : 'border-gray-200 bg-white hover:border-teal-500 hover:shadow-md active:scale-[0.985] dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-teal-500 cursor-pointer'
+      }`}
+    >
+      <div>
+        <div className="flex items-start justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-mono text-[10px] font-bold uppercase rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-slate-800 dark:text-slate-400">
+              {prod.code}
+            </span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${
+                prod.category === 'drug'
+                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
+                  : prod.category === 'vitamins'
+                  ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/60 dark:text-orange-300'
+                  : prod.category === 'cosmetics'
+                  ? 'bg-pink-100 text-pink-800 dark:bg-pink-950/60 dark:text-pink-300'
+                  : 'bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300'
+              }`}
+            >
+              {prod.category}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            {isInCart && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-teal-600 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-2xs shrink-0">
+                <Check className="h-2.5 w-2.5" />
+                <span>{totalInCartDisplay} in cart</span>
+              </span>
+            )}
+            {/* Requirement 22: For drugs, quick scientific info */}
+            {prod.category === 'drug' && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewScientific(prod);
+                }}
+                className="rounded border border-gray-200 p-1 text-gray-400 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-teal-950/40 dark:hover:text-teal-300 cursor-pointer transition-colors"
+                title="View Scientific Indications, Contraindications & Generics"
+              >
+                <Info className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <ProductCardTitle
+          name={prod.name}
+          dosage={prod.dosage}
+          presentation={prod.presentation}
+          form={prod.form}
+        />
+        {prod.ingredients ? (
+          <p className="mt-0.5 text-[10px] text-gray-500 dark:text-slate-400 break-words whitespace-normal leading-relaxed">
+            {prod.ingredients}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="mt-2.5 pt-2 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-2">
+        <div className="shrink-0">
+          <div className="text-sm font-bold text-blue-600 dark:text-blue-400">
+            ${prod.priceUSD.toFixed(2)}
+          </div>
+          <div className="text-[10px] font-medium text-green-700 dark:text-green-400">
+            {formatLBPValue(prod.priceLBP)} LBP
+          </div>
+        </div>
+
+        <div className="text-right flex flex-col items-end space-y-1 shrink-0">
+          {prod.isDivisible && prod.piecesPerBox && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddPiece(prod);
+              }}
+              className="px-1.5 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 dark:text-indigo-300 rounded text-[9px] font-bold shadow-xs transition-colors border border-indigo-200 dark:border-indigo-800/50 z-10 cursor-pointer"
+            >
+              + Add {prod.pieceName || 'Piece'}
+            </button>
+          )}
+          <span
+            className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+              isOut
+                ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300'
+                : isLow
+                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                : 'text-green-700 dark:text-green-400 font-semibold'
+            }`}
+          >
+            {isOut ? 'Out of Stock' : `${formatStockDisplay(prod.stockQuantity, prod.isDivisible, prod.piecesPerBox, prod.pieceName)} in stock`}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
   const {
     products,
@@ -203,6 +356,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
   } = usePharmacy();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearchQuery = useDebounce(searchQuery, 250);
 
   useBarcodeScanner({
     onScan: (barcode) => {
@@ -243,6 +397,15 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
   const [leftPanelMode, setLeftPanelMode] = useState<'log' | 'catalog'>('log');
   const catalogContainerRef = useRef<HTMLDivElement>(null);
 
+  const getNumCols = () => (window.innerWidth >= 1280 ? 3 : window.innerWidth >= 640 ? 2 : 1);
+
+  const [numCols, setNumCols] = useState<number>(() => getNumCols());
+  useEffect(() => {
+    const updateCols = () => setNumCols(getNumCols());
+    window.addEventListener('resize', updateCols);
+    return () => window.removeEventListener('resize', updateCols);
+  }, []);
+
   const [focusedItemIndex, setFocusedItemIndex] = useState<number>(-1);
   const addToCartRef = useRef<((product: Product, isPiece?: boolean) => void) | null>(null);
 
@@ -251,19 +414,46 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
     addToCartRef.current = addToCart;
   });
 
-  // Filtered products: dynamically sorts items in cart to the top
+  // Filtered products: search is expensive (multi-word + Arabic normalization), so it only
+  // runs off the debounced query. Cart sorting is split out so cart changes don't re-scan 5600 products.
+  const searchedProducts = useMemo(() => {
+    return filterProductsByMultiWordQuery(products, debouncedSearchQuery, selectedCategory);
+  }, [products, debouncedSearchQuery, selectedCategory]);
+
+  const cartProductIds = useMemo(() => new Set(cart.map(item => item.product.id)), [cart]);
+
+  const cartInfoById = useMemo(() => {
+    const map = new Map<string, { boxes: number; pieces: number }>();
+    for (const item of cart) {
+      const entry = map.get(item.product.id) || { boxes: 0, pieces: 0 };
+      if (item.isPiece) entry.pieces += item.quantity;
+      else entry.boxes += item.quantity;
+      map.set(item.product.id, entry);
+    }
+    return map;
+  }, [cart]);
+
   const filteredProducts = useMemo(() => {
-    const filtered = filterProductsByMultiWordQuery(products, searchQuery, selectedCategory);
-    
-    return filtered.sort((a, b) => {
-      const aInCart = cart.some(item => item.product.id === a.id);
-      const bInCart = cart.some(item => item.product.id === b.id);
-      
+    if (!searchedProducts.length) return searchedProducts;
+    const sorted = [...searchedProducts];
+    sorted.sort((a, b) => {
+      const aInCart = cartProductIds.has(a.id);
+      const bInCart = cartProductIds.has(b.id);
       if (aInCart && !bInCart) return -1;
       if (!aInCart && bInCart) return 1;
       return 0;
     });
-  }, [products, selectedCategory, searchQuery, cart]);
+    return sorted;
+  }, [searchedProducts, cartProductIds]);
+
+  // Virtualize the product grid: only renders the visible cards (3-col rows)
+  const productGridVirtualizer = useVirtualizer({
+    count: Math.ceil(filteredProducts.length / numCols),
+    getScrollElement: () => catalogContainerRef.current,
+    estimateSize: () => 150,
+    overscan: 4,
+    getItemKey: (index) => index,
+  });
 
   // Reset focus when filters change
   useEffect(() => {
@@ -294,7 +484,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
         setFocusedItemIndex(prev => {
           if (prev === -1) return 0;
           const next = prev < filteredProducts.length - numCols ? prev + numCols : prev;
-          setTimeout(() => document.getElementById('product-card-' + next)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 0);
+          setTimeout(() => productGridVirtualizer.scrollToIndex(Math.floor(next / numCols), { align: 'auto', behavior: 'smooth' }), 0);
           return next;
         });
       } else if (e.key === 'ArrowUp') {
@@ -302,7 +492,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
         setFocusedItemIndex(prev => {
           if (prev === -1) return 0;
           const next = prev >= numCols ? prev - numCols : 0;
-          setTimeout(() => document.getElementById('product-card-' + next)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 0);
+          setTimeout(() => productGridVirtualizer.scrollToIndex(Math.floor(next / numCols), { align: 'auto', behavior: 'smooth' }), 0);
           return next;
         });
       } else if (e.key === 'ArrowRight') {
@@ -311,7 +501,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
         setFocusedItemIndex(prev => {
           if (prev === -1) return 0;
           const next = prev < filteredProducts.length - 1 ? prev + 1 : prev;
-          setTimeout(() => document.getElementById('product-card-' + next)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 0);
+          setTimeout(() => productGridVirtualizer.scrollToIndex(Math.floor(next / numCols), { align: 'auto', behavior: 'smooth' }), 0);
           return next;
         });
       } else if (e.key === 'ArrowLeft') {
@@ -320,7 +510,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
         setFocusedItemIndex(prev => {
           if (prev === -1) return 0;
           const next = prev > 0 ? prev - 1 : 0;
-          setTimeout(() => document.getElementById('product-card-' + next)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 0);
+          setTimeout(() => productGridVirtualizer.scrollToIndex(Math.floor(next / numCols), { align: 'auto', behavior: 'smooth' }), 0);
           return next;
         });
       } else if (e.key === 'Enter') {
@@ -641,7 +831,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
 
     if (hasEnteredPayment && isUnderpaid && !writeOffDifferences) {
       setErrorMessage(
-        `Received payment is short by $${remainingUSD.toFixed(2)} (${remainingLBP.toLocaleString()} LBP). Check "Write off differences" to forgive the shortage and accept this transaction.`
+        `Received payment is short by $${remainingUSD.toFixed(2)} (${formatLBPValue(remainingLBP)} LBP). Check "Write off differences" to forgive the shortage and accept this transaction.`
       );
       return;
     }
@@ -664,7 +854,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
     if (chosenType === 'cash') {
       if (hasEnteredPayment && isUnderpaid && !writeOffDifferences) {
         setErrorMessage(
-          `Tendered cash is less than total due. Remaining: $${remainingUSD.toFixed(2)} (${remainingLBP.toLocaleString()} LBP). Please check "Write off differences" to accept.`
+          `Tendered cash is less than total due. Remaining: $${remainingUSD.toFixed(2)} (${formatLBPValue(remainingLBP)} LBP). Please check "Write off differences" to accept.`
         );
         setShowPaymentConfirmModal(false);
         return;
@@ -735,7 +925,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
         writeOffUSD: writeOffUSDAmount,
         writeOffLBP: writeOffLBPAmount,
         notes: writeOffUSDAmount > 0
-          ? `Difference written off: $${writeOffUSDAmount.toFixed(2)} (${writeOffLBPAmount.toLocaleString()} LBP)`
+          ? `Difference written off: $${writeOffUSDAmount.toFixed(2)} (${formatLBPValue(writeOffLBPAmount)} LBP)`
           : undefined,
       });
 
@@ -917,138 +1107,46 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                     <span>No products match the search query.</span>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
-                    {filteredProducts.map((prod, index) => {
-                      const isLow = prod.stockQuantity <= prod.minStockAlert;
-                      const isOut = prod.stockQuantity <= 0;
-                      const inCartItems = cart.filter((item) => item.product.id === prod.id);
-                      const isInCart = inCartItems.length > 0;
-                      const inCartBoxes = inCartItems.filter((i) => !i.isPiece).reduce((sum, i) => sum + i.quantity, 0);
-                      const inCartPieces = inCartItems.filter((i) => i.isPiece).reduce((sum, i) => sum + i.quantity, 0);
-                      const totalInCartDisplay = inCartBoxes > 0 && inCartPieces > 0
-                        ? `${inCartBoxes} bxs, ${inCartPieces} ${prod.pieceName || 'pcs'}`
-                        : inCartBoxes > 0
-                        ? `${inCartBoxes} ${inCartBoxes === 1 ? 'box' : 'boxes'}`
-                        : `${inCartPieces} ${prod.pieceName || 'pcs'}`;
-
+                  <div
+                    style={{ height: productGridVirtualizer.getTotalSize(), position: 'relative' }}
+                  >
+                    {productGridVirtualizer.getVirtualItems().map((virtualRow) => {
+                      const startIdx = virtualRow.index * numCols;
+                      const rowItems = filteredProducts.slice(startIdx, startIdx + numCols);
                       return (
                         <div
-                          key={prod.id}
-                          id={`product-card-${index}`}
-                          onClick={() => addToCart(prod)}
-                            role="button"
-                            tabIndex={isOut ? -1 : 0}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                addToCart(prod);
-                              }
-                            }}
-                            className={`group relative flex flex-col justify-between rounded-lg border p-3 transition-all select-none shadow-2xs ${
-                              focusedItemIndex === index ? 'ring-2 ring-indigo-500 dark:ring-indigo-400 border-indigo-500 z-10' : ''
-                            } ${
-                              isOut
-                                ? 'border-gray-200 bg-gray-50/70 opacity-60 dark:border-slate-800 dark:bg-slate-900/40 cursor-not-allowed'
-                                : isInCart
-                                ? 'border-teal-500 bg-teal-50/30 ring-1 ring-teal-500/30 hover:border-teal-600 hover:shadow-md active:scale-[0.985] dark:border-teal-500 dark:bg-teal-950/25 cursor-pointer'
-                                : 'border-gray-200 bg-white hover:border-teal-500 hover:shadow-md active:scale-[0.985] dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-teal-500 cursor-pointer'
-                            }`}
-                          >
-                            <div>
-                              <div className="flex items-start justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-mono text-[10px] font-bold uppercase rounded bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-slate-800 dark:text-slate-400">
-                                    {prod.code}
-                                  </span>
-                                  <span
-                                    className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${
-                                      prod.category === 'drug'
-                                        ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
-                                        : prod.category === 'vitamins'
-                                        ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/60 dark:text-orange-300'
-                                        : prod.category === 'cosmetics'
-                                        ? 'bg-pink-100 text-pink-800 dark:bg-pink-950/60 dark:text-pink-300'
-                                        : 'bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300'
-                                    }`}
-                                  >
-                                    {prod.category}
-                                  </span>
-                                </div>
-
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {isInCart && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-teal-600 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-2xs shrink-0">
-                                      <Check className="h-2.5 w-2.5" />
-                                      <span>{totalInCartDisplay} in cart</span>
-                                    </span>
-                                  )}
-                                  {/* Requirement 22: For drugs, quick scientific info */}
-                                  {prod.category === 'drug' && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onViewScientific(prod);
-                                      }}
-                                      className="rounded border border-gray-200 p-1 text-gray-400 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-teal-950/40 dark:hover:text-teal-300 cursor-pointer transition-colors"
-                                      title="View Scientific Indications, Contraindications & Generics"
-                                    >
-                                      <Info className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              <ProductCardTitle
-                                name={prod.name}
-                                dosage={prod.dosage}
-                                presentation={prod.presentation}
-                                form={prod.form}
+                          key={virtualRow.key}
+                          data-index={virtualRow.index}
+                          ref={productGridVirtualizer.measureElement}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            transform: `translateY(${virtualRow.start}px)`,
+                            display: 'grid',
+                            gridTemplateColumns: `repeat(${numCols}, minmax(0, 1fr))`,
+                            gap: '0.625rem',
+                          }}
+                        >
+                          {rowItems.map((prod, j) => {
+                            const realIndex = startIdx + j;
+                            const cartInfo = cartInfoById.get(prod.id);
+                            return (
+                              <ProductCard
+                                key={prod.id}
+                                prod={prod}
+                                index={realIndex}
+                                isFocused={focusedItemIndex === realIndex}
+                                inCartBoxes={cartInfo?.boxes || 0}
+                                inCartPieces={cartInfo?.pieces || 0}
+                                onAdd={addToCart}
+                                onAddPiece={(p) => addToCart(p, true)}
+                                onViewScientific={onViewScientific}
                               />
-                              {prod.ingredients ? (
-                                <p className="mt-0.5 text-[10px] text-gray-500 dark:text-slate-400 break-words whitespace-normal leading-relaxed">
-                                  {prod.ingredients}
-                                </p>
-                              ) : null}
-                            </div>
-
-                            <div className="mt-2.5 pt-2 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-2">
-                              <div className="shrink-0">
-                                <div className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                                  ${prod.priceUSD.toFixed(2)}
-                                </div>
-                                <div className="text-[10px] font-medium text-green-700 dark:text-green-400">
-                                  {prod.priceLBP.toLocaleString()} LBP
-                                </div>
-                              </div>
-
-                              <div className="text-right flex flex-col items-end space-y-1 shrink-0">
-                                {prod.isDivisible && prod.piecesPerBox && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      addToCart(prod, true);
-                                    }}
-                                    className="px-1.5 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:hover:bg-indigo-900/60 dark:text-indigo-300 rounded text-[9px] font-bold shadow-xs transition-colors border border-indigo-200 dark:border-indigo-800/50 z-10 cursor-pointer"
-                                  >
-                                    + Add {prod.pieceName || 'Piece'}
-                                  </button>
-                                )}
-                                <span
-                                  className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                                    isOut
-                                      ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300'
-                                      : isLow
-                                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                                      : 'text-green-700 dark:text-green-400 font-semibold'
-                                  }`}
-                                >
-                                  {isOut ? 'Out of Stock' : `${formatStockDisplay(prod.stockQuantity, prod.isDivisible, prod.piecesPerBox, prod.pieceName)} in stock`}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
+                            );
+                          })}
+                        </div>
                       );
                     })}
                   </div>
@@ -1295,7 +1393,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                 </span>
                 {totalDiscountLBP > 0 && (
                   <span className="ml-1 text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-mono">
-                    (-{totalDiscountLBP.toLocaleString()} LBP)
+                    (-{formatLBPValue(totalDiscountLBP)} LBP)
                   </span>
                 )}
               </div>
@@ -1321,7 +1419,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                     +${totalTaxUSD.toFixed(2)}
                   </span>
                   <span className="ml-1 text-[9px] text-amber-600/80 dark:text-amber-400/80 font-mono">
-                    (+{totalTaxLBP.toLocaleString()} LBP)
+                    (+{formatLBPValue(totalTaxLBP)} LBP)
                   </span>
                 </div>
               </div>
@@ -1340,7 +1438,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                 Total (L.L.):
               </span>
               <span className="text-xs font-mono font-bold text-slate-900 dark:text-slate-100">
-                {totalLBP.toLocaleString()}
+{formatLBPValue(totalLBP)}
               </span>
             </div>
             
@@ -1438,7 +1536,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                       <button
                         type="button"
                         onClick={() => {
-                          setTenderedLBP(totalLBP.toLocaleString());
+                          setTenderedLBP(formatLBPValue(totalLBP));
                           setTenderedUSD('');
                           setPaymentMethod('cash_lbp');
                         }}
@@ -1482,7 +1580,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                         setPaymentMethod('mixed');
                       }
                     }}
-                    placeholder={totalLBP > 0 ? totalLBP.toLocaleString() : '0'}
+                    placeholder={totalLBP > 0 ? formatLBPValue(totalLBP) : '0'}
                     className="w-full rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-mono font-bold tracking-wider text-slate-900 placeholder:text-gray-400 placeholder:font-normal focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 transition-all"
                   />
                 </div>
@@ -1502,7 +1600,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                     Change to Return:
                   </span>
                   <span className="font-mono text-sm font-extrabold text-emerald-700 dark:text-emerald-300 leading-none">
-                    {changeLBP.toLocaleString()} LBP
+{formatLBPValue(changeLBP)} LBP
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-[10px] pt-0.5 border-t border-emerald-200/60 dark:border-emerald-800/40">
@@ -1530,7 +1628,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                     Remaining Balance Due:
                   </span>
                   <span className="font-mono font-bold text-amber-900 dark:text-amber-200 text-xs">
-                    {remainingLBP.toLocaleString()} LBP
+{formatLBPValue(remainingLBP)} LBP
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-amber-800/90 dark:text-amber-300/90 pt-0.5 border-t border-amber-200/60 dark:border-amber-900/40">
@@ -1645,7 +1743,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
               <div className="flex justify-between items-center">
                 <span className="text-gray-500 dark:text-slate-400">Current Outstanding Debt:</span>
                 <span className={`font-mono font-bold ${selectedCust.balanceUSD > 0 || selectedCust.balanceLBP > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-600 dark:text-slate-400'}`}>
-                  ${selectedCust.balanceUSD.toFixed(2)} / {selectedCust.balanceLBP.toLocaleString()} LBP
+                  ${selectedCust.balanceUSD.toFixed(2)} / {formatLBPValue(selectedCust.balanceLBP)} LBP
                 </span>
               </div>
               <div className="flex justify-between items-center pt-1.5 border-t border-slate-200/80 dark:border-slate-700/80">
@@ -1655,7 +1753,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                     ${totalUSD.toFixed(2)}
                   </span>
                   <span className="block text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                    {totalLBP.toLocaleString()} LBP
+{formatLBPValue(totalLBP)} LBP
                   </span>
                 </div>
               </div>
@@ -1664,15 +1762,15 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                   <span className="text-gray-500 dark:text-slate-400">Tendered Cash:</span>
                   <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
                     {paidUSD > 0 ? `$${paidUSD.toFixed(2)} ` : ''}
-                    {paidLBP > 0 ? `${paidLBP.toLocaleString()} LBP` : ''}
-                    {isOverpaid && ` (Change: ${changeLBP.toLocaleString()} LBP)`}
+                    {paidLBP > 0 ? `${formatLBPValue(paidLBP)} LBP` : ''}
+                    {isOverpaid && ` (Change: ${formatLBPValue(changeLBP)} LBP)`}
                   </span>
                 </div>
               )}
               {hasEnteredPayment && isUnderpaid && (
                 <div className="flex justify-between items-center pt-1 border-t border-dashed border-amber-300 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-300 font-bold">
                   <span>Payment Difference:</span>
-                  <span>-${remainingUSD.toFixed(2)} ({remainingLBP.toLocaleString()} LBP)</span>
+                  <span>-${remainingUSD.toFixed(2)} ({formatLBPValue(remainingLBP)} LBP)</span>
                 </div>
               )}
               {hasEnteredPayment && isUnderpaid && writeOffDifferences && (
@@ -1724,7 +1822,7 @@ export const SaleView: React.FC<SaleViewProps> = ({ onViewScientific }) => {
                       Save as Debt Transaction
                     </span>
                     <span className="block text-[11px] text-purple-700/80 dark:text-purple-300/80">
-                      Total ${totalUSD.toFixed(2)} ({totalLBP.toLocaleString()} LBP) will be registered as debt for this customer.
+                      Total ${totalUSD.toFixed(2)} ({formatLBPValue(totalLBP)} LBP) will be registered as debt for this customer.
                     </span>
                   </div>
                 </div>

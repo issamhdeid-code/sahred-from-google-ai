@@ -22,6 +22,7 @@ import {
 import { usePharmacy } from '../../context/PharmacyContext';
 import { Product } from '../../types/pharmacy';
 import { formatStockDisplay } from '../../utils/stockUtils';
+import { formatLBPValue } from '../../utils/priceUtils';
 import { SectionRestoreButton } from '../common/SectionRestoreButton';
 
 interface DashboardViewProps {
@@ -180,10 +181,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="mt-1.5">
             <div className="text-lg font-bold text-green-700 dark:text-green-400 truncate">
-              {todayLBP.toLocaleString()} LBP
+              {formatLBPValue(todayLBP)} LBP
             </div>
             <div className="text-[10px] font-medium text-gray-500 mt-0.5">
-              Rate: 1$ = {exchangeRate.toLocaleString()} LBP
+              Rate: 1$ = {formatLBPValue(exchangeRate)} LBP
             </div>
           </div>
         </div>
@@ -203,7 +204,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               -${todayWriteOffUSD.toFixed(2)}
             </div>
             <div className="text-[10px] font-medium text-gray-500 dark:text-slate-400 mt-0.5 flex items-center justify-between">
-              <span>{todayWriteOffs.length} Today ({todayWriteOffLBP.toLocaleString()} LBP)</span>
+              <span>{todayWriteOffs.length} Today ({formatLBPValue(todayWriteOffLBP)} LBP)</span>
             </div>
             <div className="text-[9px] text-gray-400 dark:text-slate-500 mt-0.5">
               All-Time: -${totalWriteOffUSD.toFixed(2)} ({allWriteOffSales.length} sales)
@@ -347,7 +348,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         ${sale.totalUSD.toFixed(2)}
                       </div>
                       <div className="text-[10px] text-green-700 dark:text-green-400">
-                        {sale.totalLBP.toLocaleString()} LBP
+                        {formatLBPValue(sale.totalLBP)} LBP
                       </div>
                     </div>
                   </div>
@@ -390,7 +391,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Total Forgiven Differences
               </span>
               <span className="text-xs font-mono font-extrabold text-rose-600 dark:text-rose-400">
-                -${totalWriteOffUSD.toFixed(2)} USD • -{totalWriteOffLBP.toLocaleString()} LBP
+                -${totalWriteOffUSD.toFixed(2)} USD • -{formatLBPValue(totalWriteOffLBP)} LBP
               </span>
             </div>
           </div>
@@ -446,7 +447,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           ${sale.totalUSD.toFixed(2)}
                         </div>
                         <div className="text-[10px] text-gray-400">
-                          {sale.totalLBP.toLocaleString()} LBP
+                          {formatLBPValue(sale.totalLBP)} LBP
                         </div>
                       </td>
                       <td className="py-2 px-3 text-right whitespace-nowrap">
@@ -454,7 +455,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           ${sale.amountPaidUSD.toFixed(2)}
                         </div>
                         <div className="text-[10px] text-gray-400">
-                          {sale.amountPaidLBP.toLocaleString()} LBP
+                          {formatLBPValue(sale.amountPaidLBP)} LBP
                         </div>
                       </td>
                       <td className="py-2 px-3 text-right whitespace-nowrap font-mono">
@@ -462,7 +463,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           -${(sale.writeOffUSD || 0).toFixed(2)} USD
                         </div>
                         <div className="text-[10px] font-bold text-rose-500 dark:text-rose-400">
-                          -{(sale.writeOffLBP || 0).toLocaleString()} LBP
+                          -{formatLBPValue(sale.writeOffLBP || 0)} LBP
                         </div>
                       </td>
                     </tr>

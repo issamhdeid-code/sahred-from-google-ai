@@ -4,6 +4,7 @@ import { SaleTransaction, Product } from '../../types/pharmacy';
 import { formatStockDisplay } from '../../utils/stockUtils';
 import { usePharmacy } from '../../context/PharmacyContext';
 import { DesktopWindow } from '../common/DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface EditSaleModalProps {
   sale: SaleTransaction;
@@ -209,7 +210,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({ sale, onClose, onS
                       )}
                     </div>
                     <div className="text-[10px] text-gray-500 dark:text-slate-400">
-                      Code: {item.productCode} • ${item.unitPriceUSD.toFixed(2)} / unit ({item.unitPriceLBP.toLocaleString()} LBP)
+                      Code: {item.productCode} • ${item.unitPriceUSD.toFixed(2)} / unit ({formatLBPValue(item.unitPriceLBP)} LBP)
                     </div>
                   </div>
 
@@ -295,7 +296,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({ sale, onClose, onS
           <div className="rounded bg-teal-50 border border-teal-200 dark:bg-teal-950/40 dark:border-teal-900 p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] font-bold uppercase text-teal-800 dark:text-teal-300 block">
-                Updated Total Amount (Rate: 1$ = {sale.exchangeRate.toLocaleString()} L.L.)
+                Updated Total Amount (Rate: 1$ = {formatLBPValue(sale.exchangeRate)} L.L.)
               </span>
               <span className="text-sm font-bold text-teal-900 dark:text-teal-200">
                 {formatUSD(totalUSD)}

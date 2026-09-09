@@ -4,6 +4,7 @@ import { usePharmacy } from '../../context/PharmacyContext';
 import { Product } from '../../types/pharmacy';
 
 import { DesktopWindow } from '../common/DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface PriceUpdaterModalProps {
   initialCode?: string;
@@ -139,7 +140,7 @@ export const PriceUpdaterModal: React.FC<PriceUpdaterModalProps> = ({ initialCod
               <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-emerald-200/60 dark:border-emerald-900/40">
                 <span>Current Price:</span>
                 <span className="font-bold text-slate-800 dark:text-slate-200">
-                  {targetProduct.priceLBP.toLocaleString()} L.L. (${targetProduct.priceUSD.toFixed(2)})
+                  {formatLBPValue(targetProduct.priceLBP)} L.L. (${targetProduct.priceUSD.toFixed(2)})
                 </span>
               </div>
             </div>
@@ -182,7 +183,7 @@ export const PriceUpdaterModal: React.FC<PriceUpdaterModalProps> = ({ initialCod
           </div>
 
           <div className="text-[11px] text-slate-500 dark:text-slate-400">
-            * Converted automatically based on current rate (1$ = {exchangeRate.toLocaleString()} L.L.). Price change synchronizes immediately across connected PCs and updates sale totals.
+            * Converted automatically based on current rate (1$ = {formatLBPValue(exchangeRate)} L.L.). Price change synchronizes immediately across connected PCs and updates sale totals.
           </div>
 
           {/* Action Buttons */}

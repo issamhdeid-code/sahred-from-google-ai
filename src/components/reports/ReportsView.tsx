@@ -14,6 +14,7 @@ import {
 import { usePharmacy } from '../../context/PharmacyContext';
 import { SaleTransaction, ProductCategory } from '../../types/pharmacy';
 import { SectionRestoreButton } from '../common/SectionRestoreButton';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 export const ReportsView: React.FC = () => {
   const { sales, products, exchangeRate, formatLBP, formatUSD } = usePharmacy();
@@ -183,10 +184,10 @@ export const ReportsView: React.FC = () => {
           </div>
           <div className="mt-1.5">
             <div className="text-xl font-black text-slate-900 dark:text-slate-100">
-              {totalSalesLBP.toLocaleString()} L.L.
+              {formatLBPValue(totalSalesLBP)} L.L.
             </div>
             <div className="text-[10px] font-semibold text-gray-500 mt-0.5">
-              Pegged rate: 1$ = {exchangeRate.toLocaleString()} L.L.
+              Pegged rate: 1$ = {formatLBPValue(exchangeRate)} L.L.
             </div>
           </div>
         </div>
@@ -206,7 +207,7 @@ export const ReportsView: React.FC = () => {
               ${totalProfitUSD.toFixed(2)}
             </div>
             <div className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 mt-0.5">
-              ≈ {totalProfitLBP.toLocaleString()} L.L. (Gross Margin)
+              ≈ {formatLBPValue(totalProfitLBP)} L.L. (Gross Margin)
             </div>
           </div>
         </div>
@@ -339,7 +340,7 @@ export const ReportsView: React.FC = () => {
                     ${s.totalUSD.toFixed(2)}
                   </td>
                   <td className="py-1.5 px-3 font-semibold text-slate-800 dark:text-slate-200">
-                    {s.totalLBP.toLocaleString()} L.L.
+                    {formatLBPValue(s.totalLBP)} L.L.
                   </td>
                 </tr>
               ))}

@@ -15,6 +15,10 @@ export function formatPriceChangePercent(pct: number): string {
   return rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
 }
 
+export function formatLBPValue(amount: number): string {
+  return Math.round(amount).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
 export function getPriceChangeInfoUSD(prod: Product): PriceChangeIndicatorData | null {
   // Case 1: Skipped decreased price from CSV import
   // If price in CSV was lower than existing price, the update to the lower price was skipped,

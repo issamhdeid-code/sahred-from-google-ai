@@ -23,6 +23,7 @@ import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
 import { Product, PurchaseItem, PurchaseInvoice } from '../../types/pharmacy';
 import { filterProductsByMultiWordQuery } from '../../utils/searchUtils';
 import { DesktopWindow } from '../common/DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 import { SectionRestoreButton } from '../common/SectionRestoreButton';
 
 export const PurchaseView: React.FC = () => {
@@ -629,10 +630,10 @@ export const PurchaseView: React.FC = () => {
                       ${inv.totalCostUSD.toFixed(2)}
                     </td>
                     <td className="py-2 px-3 font-medium text-green-700 dark:text-green-400">
-                      {inv.totalCostLBP.toLocaleString()} LBP
+                      {formatLBPValue(inv.totalCostLBP)} LBP
                     </td>
                     <td className="py-2 px-3 text-gray-500 font-mono text-[10px]">
-                      1$ = {inv.exchangeRate.toLocaleString()} LBP
+                      1$ = {formatLBPValue(inv.exchangeRate)} LBP
                     </td>
                     <td className="py-2 px-3">
                       <span
@@ -709,7 +710,7 @@ export const PurchaseView: React.FC = () => {
               </div>
               <div>
                 <span className="block text-[10px] uppercase font-bold text-slate-500">Exchange Rate</span>
-                <span className="font-semibold">{viewingPurchase.exchangeRate.toLocaleString()} LBP</span>
+                <span className="font-semibold">{formatLBPValue(viewingPurchase.exchangeRate)} LBP</span>
               </div>
             </div>
 
@@ -749,7 +750,7 @@ export const PurchaseView: React.FC = () => {
               </div>
               <div className="text-right border-l border-slate-200 dark:border-slate-700 pl-4">
                 <span className="block text-[10px] uppercase font-bold text-slate-500">Total LBP</span>
-                <span className="text-lg font-bold text-green-600 dark:text-green-400">{viewingPurchase.totalCostLBP.toLocaleString()}</span>
+                <span className="text-lg font-bold text-green-600 dark:text-green-400">{formatLBPValue(viewingPurchase.totalCostLBP)}</span>
               </div>
             </div>
 
@@ -1253,7 +1254,7 @@ export const PurchaseView: React.FC = () => {
                 </span>
                 <div className="text-right">
                   <div className="text-sm font-extrabold">${totalCostUSD.toFixed(2)}</div>
-                  <div className="text-[10px] opacity-75">{totalCostLBP.toLocaleString()} LBP</div>
+                  <div className="text-[10px] opacity-75">{formatLBPValue(totalCostLBP)} LBP</div>
                 </div>
               </div>
             )}

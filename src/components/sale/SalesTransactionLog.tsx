@@ -20,6 +20,7 @@ import { usePharmacy } from '../../context/PharmacyContext';
 import { ViewSaleModal } from './ViewSaleModal';
 import { EditSaleModal } from './EditSaleModal';
 import { ReceiptModal } from '../common/ReceiptModal';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface SalesTransactionLogProps {
   onSwitchToCatalog?: () => void;
@@ -296,7 +297,7 @@ export const SalesTransactionLog: React.FC<SalesTransactionLogProps> = ({ onSwit
                         ${sale.totalUSD.toFixed(2)}
                       </div>
                       <div className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
-                        {sale.totalLBP.toLocaleString()} LBP
+                        {formatLBPValue(sale.totalLBP)} LBP
                       </div>
                       {sale.writeOffUSD && sale.writeOffUSD > 0.001 ? (
                         <div className="text-[9px] font-extrabold text-rose-600 dark:text-rose-400">

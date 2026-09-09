@@ -3,6 +3,7 @@ import { X, Printer, Edit, Calendar, User, Clock, CheckCircle2, ShieldAlert, Cre
 import { SaleTransaction } from '../../types/pharmacy';
 import { usePharmacy } from '../../context/PharmacyContext';
 import { DesktopWindow } from '../common/DesktopWindow';
+import { formatLBPValue } from '../../utils/priceUtils';
 
 interface ViewSaleModalProps {
   sale: SaleTransaction;
@@ -40,7 +41,7 @@ export const ViewSaleModal: React.FC<ViewSaleModalProps> = ({ sale, onClose, onE
             <div>
               <span className="text-gray-400 block uppercase font-semibold text-[9px]">Applied Exchange Rate</span>
               <span className="font-bold text-blue-700 dark:text-blue-300">
-                1$ = {sale.exchangeRate.toLocaleString()} L.L.
+                1$ = {formatLBPValue(sale.exchangeRate)} L.L.
               </span>
             </div>
           </div>
@@ -104,7 +105,7 @@ export const ViewSaleModal: React.FC<ViewSaleModalProps> = ({ sale, onClose, onE
                           ${item.totalUSD.toFixed(2)}
                         </div>
                         <div className="text-[9px] text-gray-400">
-                          {item.totalLBP.toLocaleString()} LBP
+                          {formatLBPValue(item.totalLBP)} LBP
                         </div>
                       </td>
                     </tr>
@@ -143,7 +144,7 @@ export const ViewSaleModal: React.FC<ViewSaleModalProps> = ({ sale, onClose, onE
                 <span>Amount Paid: </span>
                 <strong>
                   {sale.amountPaidUSD > 0 && `$${sale.amountPaidUSD.toFixed(2)} `}
-                  {sale.amountPaidLBP > 0 && `${sale.amountPaidLBP.toLocaleString()} LBP`}
+                  {sale.amountPaidLBP > 0 && `${formatLBPValue(sale.amountPaidLBP)} LBP`}
                   {sale.amountPaidUSD === 0 && sale.amountPaidLBP === 0 && (sale.paymentMethod === 'credit_debt' ? 'Debt Charged' : '$0.00')}
                 </strong>
               </div>
@@ -151,7 +152,7 @@ export const ViewSaleModal: React.FC<ViewSaleModalProps> = ({ sale, onClose, onE
                 <span>Change Returned: </span>
                 <strong>
                   {sale.changeGivenUSD > 0 && `$${sale.changeGivenUSD.toFixed(2)} `}
-                  {sale.changeGivenLBP > 0 && `${sale.changeGivenLBP.toLocaleString()} LBP`}
+                  {sale.changeGivenLBP > 0 && `${formatLBPValue(sale.changeGivenLBP)} LBP`}
                   {sale.changeGivenUSD === 0 && sale.changeGivenLBP === 0 && 'None'}
                 </strong>
               </div>
@@ -160,7 +161,7 @@ export const ViewSaleModal: React.FC<ViewSaleModalProps> = ({ sale, onClose, onE
             {sale.writeOffUSD && sale.writeOffUSD > 0.001 ? (
               <div className="mt-2 flex items-center justify-between rounded bg-rose-50 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900">
                 <span>Difference Written Off:</span>
-                <span>-${sale.writeOffUSD.toFixed(2)} (-{(sale.writeOffLBP || 0).toLocaleString()} LBP)</span>
+                <span>-${sale.writeOffUSD.toFixed(2)} (-{formatLBPValue(sale.writeOffLBP || 0)} LBP)</span>
               </div>
             ) : null}
           </div>

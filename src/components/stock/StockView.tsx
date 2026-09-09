@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Search,
   Plus,
@@ -22,12 +22,14 @@ import {
   ArrowUp,
   ArrowDown
 } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { usePharmacy } from '../../context/PharmacyContext';
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
+import { useDebounce } from '../../hooks/useDebounce';
 import { Product, ProductCategory, ScientificDrugInfo } from '../../types/pharmacy';
 import { formatStockDisplay } from '../../utils/stockUtils';
 import { resolveStraightforwardScientificInfo } from '../../services/scientificDataService';
-import { getPriceChangeInfoUSD, getPriceChangeInfoLBP } from '../../utils/priceUtils';
+import { getPriceChangeInfoUSD, getPriceChangeInfoLBP, formatLBPValue } from '../../utils/priceUtils';
 import { PriceUpdaterModal } from './PriceUpdaterModal';
 import { DrugDetailsModal } from './DrugDetailsModal';
 import { BulkEditStockModal } from './BulkEditStockModal';
@@ -100,6 +102,289 @@ const parseExpiryDate = (dateStr?: string): { date: Date | null; displayMMYYYY: 
   return { date: null, displayMMYYYY: str };
 };
 
+const STOCK_GRID_COLUMNS = '40px 90px 110px minmax(130px, 1.6fr) minmax(125px, 1.2fr) 120px 105px 115px 75px 100px 100px 105px';
+const STOCK_MIN_WIDTH = 1215;
+
+interface StockTableRowProps {
+  prod: Product;
+  index: number;
+  isSelected: boolean;
+  isRowSelected: boolean;
+  changeUSD?: ReturnType<typeof getPriceChangeInfoUSD>;
+  changeLBP?: ReturnType<typeof getPriceChangeInfoLBP>;
+  onToggleRowSelect: (id: string, index: number, isShift: boolean) => void;
+  onOpenDetails: (prod: Product) => void;
+  onOpenPrice: (code: string) => void;
+  onViewScientific: (prod: Product) => void;
+  onEdit: (prod: Product) => void;
+}
+
+const StockTableRow = React.memo(React.forwardRef<HTMLDivElement, StockTableRowProps & { dataIndex?: number; style?: React.CSSProperties }>(function StockTableRow({
+  prod,
+  index,
+  isSelected,
+  isRowSelected,
+  changeUSD,
+  changeLBP,
+  onToggleRowSelect,
+  onOpenDetails,
+  onOpenPrice,
+  onViewScientific,
+  onEdit,
+  dataIndex,
+  style,
+}, ref) {
+  const isLow = prod.stockQuantity <= prod.minStockAlert;
+  const isOut = prod.stockQuantity <= 0;
+
+  const renderExpiryCellView = React.useCallback((prod: Product) => {
+    const expiry = prod.expiryDate || prod.batches?.[0]?.expiryDate;
+    if (!expiry || !expiry.trim()) {
+      return null;
+    }
+
+    const { date: expDate, displayMMYYYY } = parseExpiryDate(expiry);
+
+    let isExpired = false;
+    let isNearExpiry = false;
+    let monthsLeft = 0;
+
+    if (expDate && !isNaN(expDate.getTime())) {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const diffTime = expDate.getTime() - now.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      isExpired = diffDays < 0;
+      isNearExpiry = diffDays >= 0 && diffDays <= 90;
+      monthsLeft = Math.max(1, Math.round(diffDays / 30));
+    }
+
+    // Filter active batches with quantity > 0 (omit zero quantity batches)
+    const activeBatches = prod.batches && prod.batches.length > 0
+      ? prod.batches.filter((b) => (b.quantity || 0) > 0)
+      : (prod.stockQuantity > 0
+          ? [{ batchNumber: prod.batchNumber || 'N/A', expiryDate: expiry, quantity: prod.stockQuantity }]
+          : []);
+
+    // Tooltip format in exact requested order: (batch number, expiry, quantity of each batch)
+    const tooltipText = activeBatches.length > 0
+      ? activeBatches
+          .map((b) => {
+            const expFormatted = parseExpiryDate(b.expiryDate).displayMMYYYY || b.expiryDate || 'N/A';
+            return `Batch: ${b.batchNumber || 'N/A'}, Expiry: ${expFormatted}, Quantity: ${formatStockDisplay(b.quantity || 0, prod.isDivisible, prod.piecesPerBox, prod.pieceName)}`;
+          })
+          .join('\n')
+      : undefined;
+
+    const extraBatchesCount = activeBatches.length > 1 ? activeBatches.length - 1 : 0;
+
+    return (
+      <div className="flex flex-col py-0.5" title={tooltipText}>
+        <div className="flex items-center gap-1.5 cursor-default">
+          <span
+            className={`font-mono text-xs ${
+              isExpired
+                ? 'font-bold text-red-600 dark:text-red-400'
+                : isNearExpiry
+                ? 'font-semibold text-amber-600 dark:text-amber-400'
+                : 'text-slate-700 dark:text-slate-300'
+            }`}
+          >
+            {displayMMYYYY}
+          </span>
+          {extraBatchesCount > 0 && (
+            <span
+              className="text-[9px] px-1 py-0.2 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded font-medium"
+              title={tooltipText}
+            >
+              +{extraBatchesCount}
+            </span>
+          )}
+        </div>
+        {isExpired ? (
+          <span className="text-[10px] font-bold text-red-600 dark:text-red-400 leading-tight">
+            Expired
+          </span>
+        ) : isNearExpiry ? (
+          <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-tight">
+            Expiring in {monthsLeft}m
+          </span>
+        ) : null}
+      </div>
+    );
+  }, []);
+
+  return (
+    <div
+      role="row"
+      ref={ref}
+      data-index={dataIndex}
+      style={{ gridTemplateColumns: STOCK_GRID_COLUMNS, ...style }}
+      id={`stock-table-row-${prod.id}`}
+      onClick={() => onOpenDetails(prod)}
+      className={`grid items-center text-xs hover:bg-blue-50/70 dark:hover:bg-slate-800/60 cursor-pointer border-b transition-colors ${
+        isRowSelected
+          ? 'bg-teal-50/80 dark:bg-teal-950/50 border-teal-200 dark:border-teal-800'
+          : isSelected
+          ? 'bg-blue-50/50 dark:bg-slate-800/40 border-gray-100 dark:border-slate-800/80'
+          : 'bg-white dark:bg-slate-900 border-gray-100 dark:border-slate-800/80'
+      }`}
+    >
+      <div role="cell"
+        className="px-3 py-2 text-center"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleRowSelect(prod.id, index, e.shiftKey);
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={isRowSelected}
+          onChange={() => {}}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleRowSelect(prod.id, index, e.shiftKey);
+          }}
+          className="rounded text-teal-600 focus:ring-teal-500 h-3.5 w-3.5 cursor-pointer align-middle"
+        />
+      </div>
+      <div role="cell" className="px-3 py-2 font-mono text-gray-500 dark:text-slate-400">
+        {prod.code}
+      </div>
+      <div role="cell" className="px-3 py-2 font-mono text-gray-500 dark:text-slate-400">
+        {prod.barcode || '-'}
+      </div>
+      <div role="cell" className="px-3 py-2 font-bold text-slate-900 dark:text-slate-100">
+        <div>{prod.name}</div>
+        <div className="text-[10px] font-normal text-gray-400">
+          {prod.dosage} • {prod.form}
+        </div>
+      </div>
+      <div role="cell"
+        id={`td-stock-presentation-${prod.id}`}
+        className="px-3 py-2 text-slate-700 dark:text-slate-300 min-w-0 truncate"
+        title={prod.presentation || ''}
+      >
+        {prod.presentation ? (
+          <span>{prod.presentation}</span>
+        ) : (
+          <span className="text-gray-400 dark:text-slate-500 italic">-</span>
+        )}
+      </div>
+      <div role="cell" className="px-3 py-2">
+        <span
+          className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+            prod.category === 'drug'
+              ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/70 dark:text-blue-300'
+              : prod.category === 'vitamins'
+              ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/70 dark:text-orange-300'
+              : prod.category === 'cosmetics'
+              ? 'bg-pink-100 text-pink-800 dark:bg-pink-950/70 dark:text-pink-300'
+              : 'bg-teal-100 text-teal-800 dark:bg-teal-950/70 dark:text-teal-300'
+          }`}
+        >
+          {prod.category}
+        </span>
+      </div>
+      <div role="cell" className="px-3 py-2 text-right font-medium text-blue-600 dark:text-blue-400">
+        <div className="flex items-center justify-end gap-1">
+          <span>${prod.priceUSD.toFixed(2)}</span>
+          {changeUSD && (
+            <span
+              className={`flex items-center text-[10px] font-semibold ${
+                changeUSD.direction === 'up' ? 'text-green-500' : 'text-red-500'
+              }`}
+              title={
+                changeUSD.isSkippedDecrease
+                  ? `Lower CSV price ($${changeUSD.importedPrice?.toFixed(2)}) was skipped to preserve selling price (-${changeUSD.percentFormatted}%)`
+                  : changeUSD.direction === 'up'
+                  ? `Price increased by ${changeUSD.percentFormatted}% (was $${prod.previousPriceUSD?.toFixed(2)})`
+                  : `Price decreased by ${changeUSD.percentFormatted}% (was $${prod.previousPriceUSD?.toFixed(2)})`
+              }
+            >
+              {changeUSD.direction === 'up' ? <ArrowUp className="h-2.5 w-2.5" /> : <ArrowDown className="h-2.5 w-2.5" />}
+              {changeUSD.percentFormatted}%
+            </span>
+          )}
+        </div>
+      </div>
+      <div role="cell" className="px-3 py-2 text-right font-medium text-green-700 dark:text-green-400">
+        <div className="flex items-center justify-end gap-1">
+          <span>{formatLBPValue(prod.priceLBP)}</span>
+          {changeLBP && (
+            <span
+              className={`flex items-center text-[10px] font-semibold ${
+                changeLBP.direction === 'up' ? 'text-green-500' : 'text-red-500'
+              }`}
+              title={
+                changeLBP.isSkippedDecrease
+                  ? `Lower CSV price (${formatLBPValue(changeLBP.importedPrice ?? 0)} LBP) was skipped to preserve selling price (-${changeLBP.percentFormatted}%)`
+                  : changeLBP.direction === 'up'
+                  ? `Price increased by ${changeLBP.percentFormatted}% (was ${formatLBPValue(prod.previousPriceLBP ?? 0)} LBP)`
+                  : `Price decreased by ${changeLBP.percentFormatted}% (was ${formatLBPValue(prod.previousPriceLBP ?? 0)} LBP)`
+              }
+            >
+              {changeLBP.direction === 'up' ? <ArrowUp className="h-2.5 w-2.5" /> : <ArrowDown className="h-2.5 w-2.5" />}
+              {changeLBP.percentFormatted}%
+            </span>
+          )}
+        </div>
+      </div>
+      <div role="cell" className="px-3 py-2 text-center">
+        <span
+          className={`font-bold ${
+            prod.stockQuantity === 0
+              ? 'text-red-600 dark:text-red-400 font-extrabold'
+              : prod.stockQuantity <= 3
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-green-600 dark:text-green-400'
+          }`}
+        >
+          {formatStockDisplay(prod.stockQuantity, prod.isDivisible, prod.piecesPerBox, prod.pieceName)}
+        </span>
+      </div>
+      <div role="cell" className="px-3 py-2 whitespace-nowrap">
+        {renderExpiryCellView(prod)}
+      </div>
+      <div role="cell" className="px-3 py-2 text-gray-500 dark:text-slate-400 min-w-0 truncate">
+        {prod.agent}
+      </div>
+      <div role="cell" className="px-3 py-2 text-right">
+        <div className="flex items-center justify-end space-x-1" onClick={(e) => e.stopPropagation()}>
+          {/* Quick Price Update by Code Button */}
+          <button
+            onClick={() => onOpenPrice(prod.code)}
+            className="rounded p-1 text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-950/40"
+            title="Update price for this drug"
+          >
+            <Tag className="h-3.5 w-3.5" />
+          </button>
+
+          {/* Scientific Info Button */}
+          {prod.category === 'drug' && (
+            <button
+              onClick={() => onViewScientific(prod)}
+              className="rounded p-1 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+              title="View Full Scientific Dossier"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+            </button>
+          )}
+
+          {/* Edit Product */}
+          <button
+            onClick={() => onEdit(prod)}
+            className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            title="Edit Item Details"
+          >
+            <Edit2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}));
+
 export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCSVImport, onOpenMOPHUpdater }) => {
   const {
     products,
@@ -118,6 +403,7 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
   } = usePharmacy();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearchQuery = useDebounce(searchQuery, 250);
 
   useBarcodeScanner({
     onScan: (barcode) => {
@@ -186,7 +472,7 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
     return products.filter((prod) => {
       const matchCat = selectedCategory === 'all' || prod.category === selectedCategory;
       const matchLow = !showLowStockOnly || prod.stockQuantity <= prod.minStockAlert;
-      const q = searchQuery.trim().toLowerCase();
+      const q = debouncedSearchQuery.trim().toLowerCase();
       const rawExpiry = prod.expiryDate || prod.batches?.[0]?.expiryDate || '';
       const formattedExp = rawExpiry ? parseExpiryDate(rawExpiry).displayMMYYYY.toLowerCase() : '';
       const matchSearch =
@@ -201,7 +487,7 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
         formattedExp.includes(q);
       return matchCat && matchLow && matchSearch;
     });
-  }, [products, selectedCategory, showLowStockOnly, searchQuery]);
+  }, [products, selectedCategory, showLowStockOnly, debouncedSearchQuery]);
 
   const sortedProducts = useMemo(() => {
     let sortableItems = [...filteredProducts];
@@ -242,6 +528,26 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
   const selectedProductsList = useMemo(() => {
     return products.filter((p) => selectedProductIds.has(p.id));
   }, [products, selectedProductIds]);
+
+  // Pre-compute price change info per product (avoids running inside every row render)
+  const priceChangeInfo = useMemo(() => {
+    const map = new Map<string, { usd?: ReturnType<typeof getPriceChangeInfoUSD>; lbp?: ReturnType<typeof getPriceChangeInfoLBP> }>();
+    for (const p of sortedProducts) {
+      map.set(p.id, { usd: getPriceChangeInfoUSD(p), lbp: getPriceChangeInfoLBP(p) });
+    }
+    return map;
+  }, [sortedProducts]);
+
+  // Virtualization for the stock table (renders only visible rows)
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: sortedProducts.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 44,
+    overscan: 10,
+  });
+
+  const rowVirtualItems = rowVirtualizer.getVirtualItems();
 
   const allFilteredSelected =
     sortedProducts.length > 0 && sortedProducts.every((p) => selectedProductIds.has(p.id));
@@ -319,83 +625,6 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedProductIds.size, isBulkEditModalOpen, isBulkDeleteModalOpen]);
-
-  const renderExpiryCell = (prod: Product) => {
-    const expiry = prod.expiryDate || prod.batches?.[0]?.expiryDate;
-    if (!expiry || !expiry.trim()) {
-      return null;
-    }
-
-    const { date: expDate, displayMMYYYY } = parseExpiryDate(expiry);
-
-    let isExpired = false;
-    let isNearExpiry = false;
-    let monthsLeft = 0;
-
-    if (expDate && !isNaN(expDate.getTime())) {
-      const now = new Date();
-      now.setHours(0, 0, 0, 0);
-      const diffTime = expDate.getTime() - now.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      isExpired = diffDays < 0;
-      isNearExpiry = diffDays >= 0 && diffDays <= 90;
-      monthsLeft = Math.max(1, Math.round(diffDays / 30));
-    }
-
-    // Filter active batches with quantity > 0 (omit zero quantity batches)
-    const activeBatches = prod.batches && prod.batches.length > 0
-      ? prod.batches.filter((b) => (b.quantity || 0) > 0)
-      : (prod.stockQuantity > 0
-          ? [{ batchNumber: prod.batchNumber || 'N/A', expiryDate: expiry, quantity: prod.stockQuantity }]
-          : []);
-
-    // Tooltip format in exact requested order: (batch number, expiry, quantity of each batch)
-    const tooltipText = activeBatches.length > 0
-      ? activeBatches
-          .map((b) => {
-            const expFormatted = parseExpiryDate(b.expiryDate).displayMMYYYY || b.expiryDate || 'N/A';
-            return `Batch: ${b.batchNumber || 'N/A'}, Expiry: ${expFormatted}, Quantity: ${formatStockDisplay(b.quantity || 0, prod.isDivisible, prod.piecesPerBox, prod.pieceName)}`;
-          })
-          .join('\n')
-      : undefined;
-
-    const extraBatchesCount = activeBatches.length > 1 ? activeBatches.length - 1 : 0;
-
-    return (
-      <div className="flex flex-col py-0.5" title={tooltipText}>
-        <div className="flex items-center gap-1.5 cursor-default">
-          <span
-            className={`font-mono text-xs ${
-              isExpired
-                ? 'font-bold text-red-600 dark:text-red-400'
-                : isNearExpiry
-                ? 'font-semibold text-amber-600 dark:text-amber-400'
-                : 'text-slate-700 dark:text-slate-300'
-            }`}
-          >
-            {displayMMYYYY}
-          </span>
-          {extraBatchesCount > 0 && (
-            <span
-              className="text-[9px] px-1 py-0.2 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded font-medium"
-              title={tooltipText}
-            >
-              +{extraBatchesCount}
-            </span>
-          )}
-        </div>
-        {isExpired ? (
-          <span className="text-[10px] font-bold text-red-600 dark:text-red-400 leading-tight">
-            Expired
-          </span>
-        ) : isNearExpiry ? (
-          <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-tight">
-            Expiring in {monthsLeft}m
-          </span>
-        ) : null}
-      </div>
-    );
-  };
 
   const openAddModal = () => {
     setEditingProductId(null);
@@ -779,278 +1008,131 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
         )}
 
         {/* High-Density Stock Table */}
-        <div className="flex-1 overflow-auto bg-white dark:bg-slate-900">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-gray-100 dark:bg-slate-800 sticky top-0 z-10 border-b border-gray-200 dark:border-slate-700">
-              <tr>
-                <th className="w-10 px-3 py-2 text-center">
-                  <input
-                    type="checkbox"
-                    title={allFilteredSelected ? 'Deselect all in view' : 'Select all in view'}
-                    checked={allFilteredSelected}
-                    ref={headerCheckboxRef}
-                    onChange={handleToggleSelectAll}
-                    className="rounded text-teal-600 focus:ring-teal-500 h-3.5 w-3.5 cursor-pointer align-middle"
-                  />
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('code')}
-                >
-                  <div className="flex items-center gap-1">CODE <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('barcode')}
-                >
-                  <div className="flex items-center gap-1">BARCODE <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('name')}
-                >
-                  <div className="flex items-center gap-1">NAME <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th 
-                  id="th-stock-presentation"
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('presentation')}
-                >
-                  <div className="flex items-center gap-1">PRESENTATION <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('category')}
-                >
-                  <div className="flex items-center gap-1">CATEGORY <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-right cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('priceUSD')}
-                >
-                  <div className="flex items-center justify-end gap-1"><ArrowUpDown className="h-3 w-3" /> PRICE ($)</div>
-                </th>
-                <th className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-right">PRICE (LBP)</th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-center cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('stockQuantity')}
-                >
-                  <div className="flex items-center justify-center gap-1"><ArrowUpDown className="h-3 w-3" /> QTY</div>
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('expiryDate')}
-                >
-                  <div className="flex items-center gap-1">EXPIRY <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th 
-                  className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-                  onClick={() => handleSort('agent')}
-                >
-                  <div className="flex items-center gap-1">AGENT <ArrowUpDown className="h-3 w-3" /></div>
-                </th>
-                <th className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-right">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
+        <div ref={parentRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900">
+          <div style={{ minWidth: STOCK_MIN_WIDTH }}>
+            <div
+              role="rowgroup"
+              className="sticky top-0 z-10 grid items-center text-xs bg-gray-100 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700"
+              style={{ gridTemplateColumns: STOCK_GRID_COLUMNS }}
+            >
+              <div className="px-3 py-2 text-center">
+                <input
+                  type="checkbox"
+                  title={allFilteredSelected ? 'Deselect all in view' : 'Select all in view'}
+                  checked={allFilteredSelected}
+                  ref={headerCheckboxRef}
+                  onChange={handleToggleSelectAll}
+                  className="rounded text-teal-600 focus:ring-teal-500 h-3.5 w-3.5 cursor-pointer align-middle"
+                />
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('code')}
+              >
+                <div className="flex items-center gap-1">CODE <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('barcode')}
+              >
+                <div className="flex items-center gap-1">BARCODE <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('name')}
+              >
+                <div className="flex items-center gap-1">NAME <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div
+                role="columnheader"
+                id="th-stock-presentation"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('presentation')}
+              >
+                <div className="flex items-center gap-1">PRESENTATION <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('category')}
+              >
+                <div className="flex items-center gap-1">CATEGORY <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-right cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('priceUSD')}
+              >
+                <div className="flex items-center justify-end gap-1"><ArrowUpDown className="h-3 w-3" /> PRICE ($)</div>
+              </div>
+              <div role="columnheader" className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-right">PRICE (LBP)</div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-center cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('stockQuantity')}
+              >
+                <div className="flex items-center justify-center gap-1"><ArrowUpDown className="h-3 w-3" /> QTY</div>
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('expiryDate')}
+              >
+                <div className="flex items-center gap-1">EXPIRY <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div
+                role="columnheader"
+                className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 cursor-pointer hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+                onClick={() => handleSort('agent')}
+              >
+                <div className="flex items-center gap-1">AGENT <ArrowUpDown className="h-3 w-3" /></div>
+              </div>
+              <div role="columnheader" className="px-3 py-2 font-semibold text-gray-600 dark:text-gray-300 text-right">ACTIONS</div>
+            </div>
+            <div
+              className="relative"
+              style={{ height: rowVirtualizer.getTotalSize() }}
+            >
               {sortedProducts.length === 0 ? (
-                <tr>
-                  <td colSpan={12} className="py-12 text-center text-gray-400">
-                    No items found matching the current criteria.
-                  </td>
-                </tr>
+                <div className="py-12 text-center text-gray-400 text-xs">
+                  No items found matching the current criteria.
+                </div>
               ) : (
-                sortedProducts.map((prod, index) => {
-                  const isLow = prod.stockQuantity <= prod.minStockAlert;
-                  const isOut = prod.stockQuantity <= 0;
-                  const isSelected = selectedStockProduct?.id === prod.id;
-                  const isRowSelected = selectedProductIds.has(prod.id);
-
+                rowVirtualItems.map((virtualRow) => {
+                  const prod = sortedProducts[virtualRow.index];
+                  const change = priceChangeInfo.get(prod.id);
                   return (
-                    <tr
+                    <StockTableRow
                       key={prod.id}
-                      onClick={() => {
-                        setSelectedStockProduct(prod);
+                      ref={rowVirtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      style={{ transform: `translateY(${virtualRow.start}px)`, position: 'absolute', top: 0, left: 0, width: '100%' }}
+                      prod={prod}
+                      index={virtualRow.index}
+                      isSelected={selectedStockProduct?.id === prod.id}
+                      isRowSelected={selectedProductIds.has(prod.id)}
+                      changeUSD={change?.usd}
+                      changeLBP={change?.lbp}
+                      onToggleRowSelect={handleToggleRowSelect}
+                      onOpenDetails={(p) => {
+                        setSelectedStockProduct(p);
                         setIsDetailsModalOpen(true);
                       }}
-                      className={`hover:bg-blue-50/70 dark:hover:bg-slate-800/60 cursor-pointer border-b transition-colors ${
-                        isRowSelected
-                          ? 'bg-teal-50/80 dark:bg-teal-950/50 border-teal-200 dark:border-teal-800'
-                          : isSelected
-                          ? 'bg-blue-50/50 dark:bg-slate-800/40 border-gray-100 dark:border-slate-800/80'
-                          : 'bg-white dark:bg-slate-900 border-gray-100 dark:border-slate-800/80'
-                      }`}
-                    >
-                      <td
-                        className="w-10 px-3 py-2 text-center"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleRowSelect(prod.id, index, e.shiftKey);
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isRowSelected}
-                          onChange={() => {}}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleRowSelect(prod.id, index, e.shiftKey);
-                          }}
-                          className="rounded text-teal-600 focus:ring-teal-500 h-3.5 w-3.5 cursor-pointer align-middle"
-                        />
-                      </td>
-                      <td className="px-3 py-2 font-mono text-gray-500 dark:text-slate-400">
-                        {prod.code}
-                      </td>
-                      <td className="px-3 py-2 font-mono text-gray-500 dark:text-slate-400">
-                        {prod.barcode || '-'}
-                      </td>
-                      <td className="px-3 py-2 font-bold text-slate-900 dark:text-slate-100">
-                        <div>{prod.name}</div>
-                        <div className="text-[10px] font-normal text-gray-400">
-                          {prod.dosage} • {prod.form}
-                        </div>
-                      </td>
-                      <td
-                        id={`td-stock-presentation-${prod.id}`}
-                        className="px-3 py-2 text-slate-700 dark:text-slate-300 max-w-[200px] truncate"
-                        title={prod.presentation || ''}
-                      >
-                        {prod.presentation ? (
-                          <span>{prod.presentation}</span>
-                        ) : (
-                          <span className="text-gray-400 dark:text-slate-500 italic">-</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                            prod.category === 'drug'
-                              ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/70 dark:text-blue-300'
-                              : prod.category === 'vitamins'
-                              ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/70 dark:text-orange-300'
-                              : prod.category === 'cosmetics'
-                              ? 'bg-pink-100 text-pink-800 dark:bg-pink-950/70 dark:text-pink-300'
-                              : 'bg-teal-100 text-teal-800 dark:bg-teal-950/70 dark:text-teal-300'
-                          }`}
-                        >
-                          {prod.category}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium text-blue-600 dark:text-blue-400">
-                        {(() => {
-                          const changeUSD = getPriceChangeInfoUSD(prod);
-                          return (
-                            <div className="flex items-center justify-end gap-1">
-                              <span>${prod.priceUSD.toFixed(2)}</span>
-                              {changeUSD && (
-                                <span
-                                  className={`flex items-center text-[10px] font-semibold ${
-                                    changeUSD.direction === 'up' ? 'text-green-500' : 'text-red-500'
-                                  }`}
-                                  title={
-                                    changeUSD.isSkippedDecrease
-                                      ? `Lower CSV price ($${changeUSD.importedPrice?.toFixed(2)}) was skipped to preserve selling price (-${changeUSD.percentFormatted}%)`
-                                      : changeUSD.direction === 'up'
-                                      ? `Price increased by ${changeUSD.percentFormatted}% (was $${prod.previousPriceUSD?.toFixed(2)})`
-                                      : `Price decreased by ${changeUSD.percentFormatted}% (was $${prod.previousPriceUSD?.toFixed(2)})`
-                                  }
-                                >
-                                  {changeUSD.direction === 'up' ? <ArrowUp className="h-2.5 w-2.5" /> : <ArrowDown className="h-2.5 w-2.5" />}
-                                  {changeUSD.percentFormatted}%
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium text-green-700 dark:text-green-400">
-                        {(() => {
-                          const changeLBP = getPriceChangeInfoLBP(prod);
-                          return (
-                            <div className="flex items-center justify-end gap-1">
-                              <span>{prod.priceLBP.toLocaleString()}</span>
-                              {changeLBP && (
-                                <span
-                                  className={`flex items-center text-[10px] font-semibold ${
-                                    changeLBP.direction === 'up' ? 'text-green-500' : 'text-red-500'
-                                  }`}
-                                  title={
-                                    changeLBP.isSkippedDecrease
-                                      ? `Lower CSV price (${changeLBP.importedPrice?.toLocaleString()} LBP) was skipped to preserve selling price (-${changeLBP.percentFormatted}%)`
-                                      : changeLBP.direction === 'up'
-                                      ? `Price increased by ${changeLBP.percentFormatted}% (was ${prod.previousPriceLBP?.toLocaleString()} LBP)`
-                                      : `Price decreased by ${changeLBP.percentFormatted}% (was ${prod.previousPriceLBP?.toLocaleString()} LBP)`
-                                  }
-                                >
-                                  {changeLBP.direction === 'up' ? <ArrowUp className="h-2.5 w-2.5" /> : <ArrowDown className="h-2.5 w-2.5" />}
-                                  {changeLBP.percentFormatted}%
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <span
-                          className={`font-bold ${
-                            prod.stockQuantity === 0
-                              ? 'text-red-600 dark:text-red-400 font-extrabold'
-                              : prod.stockQuantity <= 3
-                              ? 'text-amber-600 dark:text-amber-400'
-                              : 'text-green-600 dark:text-green-400'
-                          }`}
-                        >
-                          {formatStockDisplay(prod.stockQuantity, prod.isDivisible, prod.piecesPerBox, prod.pieceName)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {renderExpiryCell(prod)}
-                      </td>
-                      <td className="px-3 py-2 text-gray-500 dark:text-slate-400 truncate max-w-[120px]">
-                        {prod.agent}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <div className="flex items-center justify-end space-x-1" onClick={(e) => e.stopPropagation()}>
-                          {/* Quick Price Update by Code Button */}
-                          <button
-                            onClick={() => {
-                              setSelectedProductCode(prod.code);
-                              setIsPriceModalOpen(true);
-                            }}
-                            className="rounded p-1 text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-950/40"
-                            title="Update price for this drug"
-                          >
-                            <Tag className="h-3.5 w-3.5" />
-                          </button>
-
-                          {/* Scientific Info Button */}
-                          {prod.category === 'drug' && (
-                            <button
-                              onClick={() => onViewScientific(prod)}
-                              className="rounded p-1 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
-                              title="View Full Scientific Dossier"
-                            >
-                              <BookOpen className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-
-                          {/* Edit Product */}
-                          <button
-                            onClick={() => openEditModal(prod)}
-                            className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                            title="Edit Item Details"
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                      onOpenPrice={(code) => {
+                        setSelectedProductCode(code);
+                        setIsPriceModalOpen(true);
+                      }}
+                      onViewScientific={onViewScientific}
+                      onEdit={openEditModal}
+                    />
                   );
                 })
               )}
-            </tbody>
-          </table>
+            </div>
+          </div>
         </div>
       </div>
 
