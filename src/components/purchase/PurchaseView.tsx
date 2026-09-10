@@ -1697,7 +1697,7 @@ export const PurchaseView: React.FC = () => {
 
             {/* Total Summary */}
             {items.length > 0 && (
-              <div className="flex justify-between items-center rounded-xl bg-teal-50 border border-teal-100 p-3.5 text-teal-950 font-bold dark:bg-teal-950/40 dark:text-teal-300 shadow-sm">
+              <div className="flex justify-between items-center rounded-xl bg-teal-50 border border-teal-100 p-3.5 text-teal-950 font-bold dark:bg-teal-950/40 dark:text-teal-300 shadow-sm w-[300px] h-[50px] ml-auto">
                 <span className="flex items-center gap-2">
                   <DollarSign className="h-4 w-4" />
                   Invoice Grand Total:
