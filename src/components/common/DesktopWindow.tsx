@@ -92,6 +92,7 @@ export const DesktopWindow: React.FC<DesktopWindowProps> = ({
   section
 }) => {
   const fallbackId = useId();
+  const [initialSection] = useState(section);
   // Generate deterministic ID if propId is omitted
   const id = useMemo(() => {
     if (propId && propId.trim()) return propId.trim();
@@ -101,8 +102,8 @@ export const DesktopWindow: React.FC<DesktopWindowProps> = ({
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
-    return section ? `${section}_${cleanTitle}` : cleanTitle || fallbackId;
-  }, [propId, title, section, fallbackId]);
+    return initialSection ? `${initialSection}_${cleanTitle}` : cleanTitle || fallbackId;
+  }, [propId, title, initialSection, fallbackId]);
 
   const {
     registerWindow,
@@ -225,18 +226,27 @@ export const DesktopWindow: React.FC<DesktopWindowProps> = ({
   }, [minWidth, minHeight]);
 
   useEffect(() => {
-    if (isOpen && !registeredRef.current) {
+    if (isOpen) {
       registerWindow(id, title, section);
       registeredRef.current = true;
     }
-    
+  }, [isOpen, id, title, section, registerWindow]);
+
+  useEffect(() => {
+    if (!isOpen && registeredRef.current) {
+      unregisterWindow(id);
+      registeredRef.current = false;
+    }
+  }, [isOpen, id, unregisterWindow]);
+
+  useEffect(() => {
     return () => {
       if (registeredRef.current) {
         unregisterWindow(id);
         registeredRef.current = false;
       }
     };
-  }, [isOpen, id, title, section, registerWindow, unregisterWindow]);
+  }, [id, unregisterWindow]);
 
   // Reset window to default centered geometry
   const handleResetLayout = useCallback(() => {

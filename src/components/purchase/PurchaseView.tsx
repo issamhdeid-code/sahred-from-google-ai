@@ -26,8 +26,201 @@ import { DesktopWindow } from '../common/DesktopWindow';
 import { formatLBPValue } from '../../utils/priceUtils';
 import { SectionRestoreButton } from '../common/SectionRestoreButton';
 
+const formatWithCommas = (val: string | number) => {
+  if (val === null || val === undefined) return '';
+  const parts = val.toString().split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return parts.join('.');
+};
+
+interface PurchaseAddedItemRowProps {
+  item: PurchaseItem;
+  index: number;
+  productDetails?: Product;
+  purchaseCurrency: 'USD' | 'LBP';
+  exchangeRate: number;
+  vatRate: number;
+  onChange: (index: number, updated: PurchaseItem) => void;
+  onRemove: (index: number) => void;
+}
+
+const PurchaseAddedItemRow: React.FC<PurchaseAddedItemRowProps> = ({
+  item,
+  index,
+  productDetails,
+  purchaseCurrency,
+  exchangeRate,
+  vatRate,
+  onChange,
+  onRemove
+}) => {
+  const [costInput, setCostInput] = useState(() => (purchaseCurrency === 'USD' ? item.unitCostUSD : item.unitCostLBP).toString());
+  const [discountInput, setDiscountInput] = useState(() => (item.discount || 0).toString());
+  const [priceInput, setPriceInput] = useState(() => {
+    const val = purchaseCurrency === 'USD' ? item.sellingPriceUSD : item.sellingPriceLBP;
+    return (val || 0).toString();
+  });
+
+  const total = (purchaseCurrency === 'USD' ? item.unitCostUSD : item.unitCostLBP) * item.quantity;
+  const [totalInput, setTotalInput] = useState(total.toString());
+
+  useEffect(() => {
+    setCostInput((purchaseCurrency === 'USD' ? item.unitCostUSD : item.unitCostLBP).toString());
+    setPriceInput(((purchaseCurrency === 'USD' ? item.sellingPriceUSD : item.sellingPriceLBP) || 0).toString());
+    setDiscountInput((item.discount || 0).toString());
+  }, [purchaseCurrency, item.unitCostUSD, item.unitCostLBP, item.sellingPriceUSD, item.sellingPriceLBP, item.discount]);
+
+  useEffect(() => {
+    setTotalInput(((purchaseCurrency === 'USD' ? item.unitCostUSD : item.unitCostLBP) * item.quantity).toString());
+  }, [purchaseCurrency, item.unitCostUSD, item.unitCostLBP, item.quantity]);
+
+  const flushCost = (str: string) => {
+    const val = parseFloat(str) || 0;
+    let costUSD = 0, costLBP = 0;
+    if (purchaseCurrency === 'USD') {
+      costUSD = val; costLBP = Math.round(val * exchangeRate);
+    } else {
+      costLBP = val; costUSD = val / exchangeRate;
+    }
+    onChange(index, { ...item, unitCostUSD: costUSD, unitCostLBP: costLBP });
+  };
+  
+  const flushPrice = (str: string) => {
+    const val = parseFloat(str) || 0;
+    let pUSD = 0, pLBP = 0;
+    if (purchaseCurrency === 'USD') {
+      pUSD = val; pLBP = Math.round(val * exchangeRate);
+    } else {
+      pLBP = val; pUSD = val / exchangeRate;
+    }
+    onChange(index, { ...item, sellingPriceUSD: pUSD, sellingPriceLBP: pLBP });
+  };
+
+  return (
+    <div className="p-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+      <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-10 gap-3">
+        <div className="sm:col-span-2 relative">
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Medication / Item</label>
+          <div className="w-full rounded-lg border border-slate-200 bg-slate-50 pl-3 pr-2 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-100 flex items-center justify-between">
+            <span className="truncate font-medium">{item.productName}</span>
+            <button
+              type="button"
+              onClick={() => onRemove(index)}
+              className="p-1 text-rose-500 hover:bg-rose-100 rounded-md transition-colors dark:hover:bg-rose-900/40 cursor-pointer"
+              title="Remove Item"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+        
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit</label>
+          <select
+            value={item.isPiece ? 'piece' : 'box'}
+            onChange={(e) => onChange(index, { ...item, isPiece: e.target.value === 'piece' })}
+            disabled={!productDetails?.isDivisible}
+            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 disabled:opacity-50"
+          >
+            <option value="box">Box</option>
+            {productDetails?.isDivisible && <option value="piece">{productDetails.pieceName || 'Piece'}</option>}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Expiry</label>
+          <input
+            type="text"
+            value={item.expiryDate}
+            onChange={(e) => onChange(index, { ...item, expiryDate: e.target.value })}
+            placeholder="MM/YY"
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 font-mono dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+          <input
+            type="number"
+            value={item.quantity === 0 ? '' : item.quantity}
+            onChange={(e) => onChange(index, { ...item, quantity: parseInt(e.target.value) || 0 })}
+            onFocus={(e) => e.target.select()}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">VAT</label>
+          <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400 cursor-not-allowed">
+            {vatRate > 0 ? `${vatRate}%` : '0 VAT'}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">
+            Unit Cost {purchaseCurrency === 'USD' ? 'USD ($)' : 'LBP (ل.ل)'}
+          </label>
+          <input
+            type="text"
+            value={formatWithCommas(costInput)}
+            onChange={(e) => setCostInput(e.target.value.replace(/,/g, ''))}
+            onBlur={() => flushCost(costInput)}
+            onFocus={(e) => e.target.select()}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Discount (%)</label>
+          <input
+            type="text"
+            value={formatWithCommas(discountInput)}
+            onChange={(e) => setDiscountInput(e.target.value.replace(/,/g, ''))}
+            onBlur={() => onChange(index, { ...item, discount: parseFloat(discountInput) || 0 })}
+            onFocus={(e) => e.target.select()}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">
+            Public Price
+          </label>
+          <input
+            type="text"
+            value={formatWithCommas(priceInput)}
+            onChange={(e) => setPriceInput(e.target.value.replace(/,/g, ''))}
+            onBlur={() => flushPrice(priceInput)}
+            onFocus={(e) => e.target.select()}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Total / Item</label>
+          <input
+            type="text"
+            value={formatWithCommas(totalInput)}
+            onChange={(e) => setTotalInput(e.target.value.replace(/,/g, ''))}
+            onBlur={() => {
+              const newTotal = parseFloat(totalInput) || 0;
+              const safeQty = item.quantity <= 0 ? 1 : item.quantity;
+              let newCost = newTotal / safeQty;
+              if (purchaseCurrency === 'LBP') newCost = Math.round(newCost);
+              setCostInput(newCost.toString());
+              flushCost(newCost.toString());
+            }}
+            onFocus={(e) => e.target.select()}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 font-bold"
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const PurchaseView: React.FC = () => {
-  const { purchases, suppliers, products, recordPurchase, updatePurchase, deletePurchase, exchangeRate, formatLBP, formatUSD } = usePharmacy();
+  const { purchases, suppliers, products, recordPurchase, updatePurchase, deletePurchase, exchangeRate, formatLBP, formatUSD, settings } = usePharmacy();
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(null);
@@ -41,6 +234,7 @@ export const PurchaseView: React.FC = () => {
   const [items, setItems] = useState<PurchaseItem[]>([]);
   const [currentProductId, setCurrentProductId] = useState('');
   const [itemQty, setItemQty] = useState('0');
+  const [itemVATChoice, setItemVATChoice] = useState<'setting' | 'none'>('setting');
   const [itemCostUSD, setItemCostUSD] = useState('0');
   const [itemTotalInput, setItemTotalInput] = useState('0');
   const [isTotalFocused, setIsTotalFocused] = useState(false);
@@ -297,6 +491,13 @@ export const PurchaseView: React.FC = () => {
       } else {
         derivedPublicPrice = parsedCost;
       }
+
+      // Add VAT if chosen
+      if (itemVATChoice === 'setting') {
+        const vatRate = settings.vatRates?.[prod.category] || 0;
+        derivedPublicPrice += parsedCost * (vatRate / 100);
+      }
+
       if (purchaseCurrency === 'LBP') {
         derivedPublicPrice = Math.round(derivedPublicPrice);
       } else {
@@ -313,6 +514,10 @@ export const PurchaseView: React.FC = () => {
       const parsedDiscount = parseFloat(itemDiscount) || 0;
       if (parsedCost > 0 && parsedDiscount < 100) {
         let calc = parsedCost / (1 - parsedDiscount / 100);
+        
+        const vatRate = itemVATChoice === 'setting' && selectedProduct ? (settings.vatRates?.[selectedProduct.category] || 0) : 0;
+        calc += parsedCost * (vatRate / 100);
+
         if (purchaseCurrency === 'LBP') calc = Math.round(calc);
         else calc = Number(calc.toFixed(2));
         setItemPublicPrice(calc.toString());
@@ -324,7 +529,7 @@ export const PurchaseView: React.FC = () => {
     // Including `itemPublicPrice` causes a bug where the user deleting the last digit 
     // triggers this effect, which sees '' and instantly repopulates it with the calculation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemCostUSD, itemDiscount, purchaseCurrency]);
+  }, [itemCostUSD, itemDiscount, purchaseCurrency, itemVATChoice, selectedProduct, settings]);
 
   useEffect(() => {
     if (!isTotalFocused) {
@@ -579,6 +784,7 @@ export const PurchaseView: React.FC = () => {
     setCurrentProductId('');
     setProductSearchQuery('');
     setItemQty('0');
+    setItemVATChoice('setting');
     setItemCostUSD('0');
     setItemTotalInput('0');
     setItemDiscount('0');
@@ -649,6 +855,7 @@ export const PurchaseView: React.FC = () => {
     setCurrentProductId('');
     setProductSearchQuery('');
     setItemQty('0');
+    setItemVATChoice('setting');
     setItemCostUSD('0');
     setItemTotalInput('0');
     setItemDiscount('0');
@@ -673,6 +880,7 @@ export const PurchaseView: React.FC = () => {
     setCurrentProductId('');
     setProductSearchQuery('');
     setItemQty('0');
+    setItemVATChoice('setting');
     setItemCostUSD('0');
     setItemTotalInput('0');
     setItemDiscount('0');
@@ -1012,7 +1220,7 @@ export const PurchaseView: React.FC = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-9 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-10 gap-3">
                 <div className="sm:col-span-2 relative" ref={searchDropdownRef}>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide">
@@ -1278,6 +1486,25 @@ export const PurchaseView: React.FC = () => {
                 </div>
 
                 <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">VAT</label>
+                  <div className="relative">
+                    <select
+                      value={itemVATChoice}
+                      onChange={(e) => setItemVATChoice(e.target.value as 'setting' | 'none')}
+                      className="w-full appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-8 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-hidden focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    >
+                      <option value="setting">
+                        {selectedProduct && (settings.vatRates?.[selectedProduct.category] || 0) > 0
+                          ? `${settings.vatRates?.[selectedProduct.category]}%`
+                          : '0 VAT'}
+                      </option>
+                      <option value="none">0 VAT</option>
+                    </select>
+                    <ChevronDown className="absolute right-2 top-2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                  </div>
+                </div>
+
+                <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">
                     Unit Cost {purchaseCurrency === 'USD' ? 'USD ($)' : 'LBP (ل.ل)'}
                   </label>
@@ -1444,35 +1671,27 @@ export const PurchaseView: React.FC = () => {
               ) : (
                 items.map((it, idx) => {
                   const productDetails = products.find(p => p.id === it.productId);
+                  const vatRate = productDetails ? (settings.vatRates?.[productDetails.category] || 0) : 0;
                   return (
-                  <div key={idx} className="flex items-center justify-between p-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-slate-100">
-                        {it.productName}
-                        {productDetails && (
-                          <span className="ml-1.5 font-normal text-slate-500 text-[11px]">
-                            {productDetails.dosage} {productDetails.presentation} {productDetails.form}
-                          </span>
-                        )}
-                        {it.isPiece && (
-                          <span className="ml-1.5 inline-block rounded-sm bg-amber-100 px-1 py-0.5 text-[8px] font-bold text-amber-800 dark:bg-amber-900 dark:text-amber-300">
-                            PIECE
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-slate-500 font-medium mt-0.5">
-                        {it.quantity} {it.isPiece ? 'pieces' : 'units'} @ ${it.unitCostUSD.toFixed(2)} — <span className="text-teal-600 dark:text-teal-400 font-bold">${(it.quantity * it.unitCostUSD).toFixed(2)}</span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveItem(idx)}
-                      className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors dark:hover:bg-rose-950/40 cursor-pointer"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )})
+                    <PurchaseAddedItemRow
+                      key={idx}
+                      item={it}
+                      index={idx}
+                      productDetails={productDetails}
+                      purchaseCurrency={purchaseCurrency}
+                      exchangeRate={exchangeRate}
+                      vatRate={vatRate}
+                      onChange={(index, updated) => {
+                        setItems(prev => {
+                          const newItems = [...prev];
+                          newItems[index] = updated;
+                          return newItems;
+                        });
+                      }}
+                      onRemove={handleRemoveItem}
+                    />
+                  );
+                })
               )}
             </div>
 

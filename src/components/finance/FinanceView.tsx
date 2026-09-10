@@ -75,7 +75,7 @@ export const FinanceView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900/50 p-4 lg:p-6 overflow-y-auto min-h-0">
-      <div className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <div className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4 shrink-0">
         <div>
           <h1 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight flex items-center gap-2">
             <Wallet className="h-7 w-7 text-teal-600 dark:text-teal-400" />
@@ -88,10 +88,10 @@ export const FinanceView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex space-x-1 border-b border-slate-200 dark:border-slate-800 mb-6 overflow-x-auto">
+      <div className="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-800 mb-6 shrink-0 w-full">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors ${
+          className={`px-4 py-3 text-sm font-bold border-b-2 whitespace-nowrap transition-colors ${
             activeTab === 'overview'
               ? 'border-teal-500 text-teal-600 dark:text-teal-400'
               : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -99,12 +99,12 @@ export const FinanceView: React.FC = () => {
         >
           <div className="flex items-center gap-2">
             <TrendingUp className="h-4 w-4" />
-            Performance Overview
+            <span>Performance Overview</span>
           </div>
         </button>
         <button
           onClick={() => setActiveTab('vat')}
-          className={`px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors ${
+          className={`px-4 py-3 text-sm font-bold border-b-2 whitespace-nowrap transition-colors ${
             activeTab === 'vat'
               ? 'border-teal-500 text-teal-600 dark:text-teal-400'
               : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -112,7 +112,7 @@ export const FinanceView: React.FC = () => {
         >
           <div className="flex items-center gap-2">
             <Percent className="h-4 w-4" />
-            VAT Configuration
+            <span>VAT Configuration</span>
           </div>
         </button>
       </div>
