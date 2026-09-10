@@ -1,15 +1,26 @@
 import React, { useState } from 'react';
-import { Building2, Plus, Phone, Mail, MapPin, DollarSign, Edit, Check, X } from 'lucide-react';
+import { Building2, Plus, Phone, Mail, MapPin, DollarSign, Edit, Check, X, Trash2, AlertCircle, CloudDownload, Search } from 'lucide-react';
 import { usePharmacy } from '../../context/PharmacyContext';
 import { Supplier } from '../../types/pharmacy';
 import { DesktopWindow } from '../common/DesktopWindow';
 import { SectionRestoreButton } from '../common/SectionRestoreButton';
+import { fetchMOPHPriceList } from '../../services/mophApiService';
 
 export const SupplierView: React.FC = () => {
-  const { suppliers, addSupplier, updateSupplier, formatLBP, formatUSD } = usePharmacy();
+  const { suppliers, addSupplier, bulkAddSuppliers, updateSupplier, deleteSupplier, formatLBP, formatUSD, addNotification } = usePharmacy();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
+  const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredAndSortedSuppliers = React.useMemo(() => {
+    return suppliers
+      .filter((s) => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || s.code.toLowerCase().includes(searchQuery.toLowerCase()))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [suppliers, searchQuery]);
 
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -44,6 +55,46 @@ export const SupplierView: React.FC = () => {
     setPaymentTerms(sup.paymentTerms);
     setBalanceUSD(sup.balanceUSD.toString());
     setIsModalOpen(true);
+  };
+
+  const handleImportMOPHAgents = async () => {
+    setIsImporting(true);
+    try {
+      const priceList = await fetchMOPHPriceList();
+      const uniqueAgents = Array.from(new Set(priceList.map(item => item.agent).filter(a => a && a.trim() !== '')));
+      
+      const newSuppliers: Omit<Supplier, 'id'>[] = [];
+      
+      uniqueAgents.forEach(agentName => {
+        const normalizedName = agentName.trim().toLowerCase();
+        const exists = suppliers.some(s => s.name.trim().toLowerCase() === normalizedName);
+        if (!exists) {
+          newSuppliers.push({
+            name: agentName.trim(),
+            code: `MOPH-${Math.floor(1000 + Math.random() * 9000)}`,
+            phone: '',
+            email: '',
+            address: 'Lebanon',
+            contactPerson: '',
+            paymentTerms: '30 Days Net',
+            balanceUSD: 0,
+            balanceLBP: 0,
+          });
+        }
+      });
+      
+      if (newSuppliers.length > 0) {
+        bulkAddSuppliers(newSuppliers);
+        addNotification('Import Complete', `Successfully imported ${newSuppliers.length} new agents from MOPH.`, 'system', 'success');
+      } else {
+        addNotification('Import Complete', 'No new agents found. All MOPH agents are already registered.', 'system', 'info');
+      }
+    } catch (error) {
+      console.error(error);
+      addNotification('Import Failed', 'Could not fetch MOPH agents.', 'system', 'error');
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -99,20 +150,53 @@ export const SupplierView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={openAddModal}
-          className="flex items-center space-x-1 rounded bg-teal-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-700 shadow-2xs transition-colors cursor-pointer"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>Add Supplier</span>
-        </button>
+        {/* Search */}
+        <div className="flex-1 max-w-sm min-w-[200px] px-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search suppliers..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-3 py-1.5 text-xs rounded border border-gray-300 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 focus:outline-hidden focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-slate-800 dark:text-slate-200 transition-colors"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleImportMOPHAgents}
+            disabled={isImporting}
+            className="flex items-center space-x-1 rounded border border-teal-600 px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 dark:bg-teal-950 dark:text-teal-400 dark:border-teal-800 dark:hover:bg-teal-900 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {isImporting ? (
+              <div className="h-3.5 w-3.5 border-2 border-teal-600 dark:border-teal-400 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <CloudDownload className="h-3.5 w-3.5" />
+            )}
+            <span>Import MOPH Agents</span>
+          </button>
+          <button
+            onClick={openAddModal}
+            className="flex items-center space-x-1 rounded bg-teal-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-700 shadow-2xs transition-colors cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>Add Supplier</span>
+          </button>
+        </div>
       </div>
 
       {/* Grid of Suppliers */}
       <div className="flex-1 overflow-y-auto">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {suppliers.map((sup) => (
-            <div
+          {filteredAndSortedSuppliers.length === 0 ? (
+            <div className="col-span-full py-12 text-center text-gray-400 text-xs">
+              No suppliers found matching your criteria.
+            </div>
+          ) : (
+            filteredAndSortedSuppliers.map((sup) => (
+              <div
               key={sup.id}
               className="flex flex-col justify-between rounded border border-gray-200 bg-white p-3.5 shadow-2xs dark:border-slate-800 dark:bg-slate-900 hover:border-teal-400 transition-colors"
             >
@@ -121,12 +205,22 @@ export const SupplierView: React.FC = () => {
                   <span className="font-mono text-[10px] font-bold text-teal-800 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 px-1.5 py-0.5 rounded border border-teal-200 dark:border-teal-900">
                     {sup.code}
                   </span>
-                  <button
-                    onClick={() => openEditModal(sup)}
-                    className="p-1 text-gray-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer"
-                  >
-                    <Edit className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => openEditModal(sup)}
+                      className="p-1 text-gray-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer"
+                      title="Edit Supplier"
+                    >
+                      <Edit className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setSupplierToDelete(sup)}
+                      className="p-1 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 cursor-pointer"
+                      title="Delete Supplier"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 <h3 className="mt-1.5 text-sm font-bold text-slate-900 dark:text-slate-100">
@@ -169,7 +263,7 @@ export const SupplierView: React.FC = () => {
                 </div>
               </div>
             </div>
-          ))}
+          )))}
         </div>
       </div>
 
@@ -315,6 +409,64 @@ export const SupplierView: React.FC = () => {
               </button>
             </div>
           </form>
+        </DesktopWindow>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {supplierToDelete && (
+        <DesktopWindow
+          title="Delete Supplier"
+          isOpen={true}
+          onClose={() => {
+            setSupplierToDelete(null);
+            setDeleteError(null);
+          }}
+        >
+          <div className="p-6">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-2">
+              Confirm Deletion
+            </h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mb-6">
+              Are you sure you want to delete <span className="font-bold">{supplierToDelete.name}</span>? This action cannot be undone. 
+              If there are any purchase records associated with this supplier, the deletion will be blocked.
+            </p>
+            
+            {deleteError && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-rose-700 text-xs dark:bg-rose-950/40 dark:border-rose-900/50 dark:text-rose-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSupplierToDelete(null);
+                  setDeleteError(null);
+                }}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = deleteSupplier(supplierToDelete.id);
+                  if (res.success) {
+                    setSupplierToDelete(null);
+                    setDeleteError(null);
+                  } else {
+                    setDeleteError(res.error || 'Failed to delete supplier');
+                  }
+                }}
+                className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700 transition-all cursor-pointer active:scale-95"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
         </DesktopWindow>
       )}
     </div>

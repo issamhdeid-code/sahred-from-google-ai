@@ -399,6 +399,7 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
     formatUSD,
     currentUser,
     suppliers,
+    addSupplier,
     searchScientificDataOnline,
   } = usePharmacy();
 
@@ -459,6 +460,11 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
   const [formPriceUSD, setFormPriceUSD] = useState('');
   const [formMargin, setFormMargin] = useState('20');
   const [formAgent, setFormAgent] = useState('Mersaco Sal');
+  const [showAgentDropdown, setShowAgentDropdown] = useState(false);
+  const [isAddSupplierModalOpen, setIsAddSupplierModalOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [newSupplierPhone, setNewSupplierPhone] = useState('');
+  
   const [formBatches, setFormBatches] = useState<{batchNumber: string, expiryDate: string, quantity?: number}[]>([{ batchNumber: '', expiryDate: '', quantity: 0 }]);
 
   // Scientific Fields (for Category: Drug)
@@ -1341,17 +1347,55 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
                 />
               </div>
 
-              <div>
+              <div className="relative">
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Agent / Lebanese Distributor
                 </label>
-                <input
-                  type="text"
-                  value={formAgent}
-                  onChange={(e) => setFormAgent(e.target.value)}
-                  placeholder="e.g. Mersaco, Omnipharma, Fattal"
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 focus:border-emerald-500 focus:bg-white focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={formAgent}
+                    onChange={(e) => {
+                      setFormAgent(e.target.value);
+                      setShowAgentDropdown(true);
+                    }}
+                    onFocus={() => setShowAgentDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowAgentDropdown(false), 200)}
+                    placeholder="e.g. Mersaco, Omnipharma, Fattal"
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 focus:border-emerald-500 focus:bg-white focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                  {showAgentDropdown && (
+                    <div className="absolute z-10 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      {suppliers
+                        .filter(s => s.name.toLowerCase().includes(formAgent.toLowerCase()))
+                        .slice(0, 5)
+                        .map(agent => (
+                          <div
+                            key={agent.id}
+                            className="px-3 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-sm"
+                            onMouseDown={(e) => {
+                              e.preventDefault(); // Prevent blur
+                              setFormAgent(agent.name);
+                              setShowAgentDropdown(false);
+                            }}
+                          >
+                            {agent.name}
+                          </div>
+                      ))}
+                      <div
+                        className="px-3 py-2 cursor-pointer bg-teal-50 hover:bg-teal-100 dark:bg-teal-900/30 dark:hover:bg-teal-900/50 text-teal-700 dark:text-teal-400 font-medium text-sm flex items-center justify-between sticky bottom-0 border-t border-teal-100 dark:border-teal-800/50"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setNewSupplierName(formAgent);
+                          setIsAddSupplierModalOpen(true);
+                          setShowAgentDropdown(false);
+                        }}
+                      >
+                        + Add Custom Supplier
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1472,6 +1516,79 @@ export const StockView: React.FC<StockViewProps> = ({ onViewScientific, onOpenCS
               </button>
             </div>
           </form>
+        </DesktopWindow>
+      )}
+
+      {/* Add Custom Supplier Modal */}
+      {isAddSupplierModalOpen && (
+        <DesktopWindow
+          title="Add New Supplier"
+          isOpen={true}
+          onClose={() => setIsAddSupplierModalOpen(false)}
+          width="480px"
+          height="auto"
+        >
+          <div className="p-6">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Supplier Name
+                </label>
+                <input
+                  type="text"
+                  value={newSupplierName}
+                  onChange={(e) => setNewSupplierName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-sm focus:border-teal-500 focus:outline-hidden dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Phone (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newSupplierPhone}
+                  onChange={(e) => setNewSupplierPhone(e.target.value)}
+                  placeholder="e.g. +961 1 234 567"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-sm focus:border-teal-500 focus:outline-hidden dark:text-slate-100"
+                />
+              </div>
+            </div>
+            
+            <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsAddSupplierModalOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (newSupplierName.trim()) {
+                    addSupplier({
+                      name: newSupplierName.trim(),
+                      code: `SUP-${Math.floor(100 + Math.random() * 900)}`,
+                      phone: newSupplierPhone.trim(),
+                      email: '',
+                      address: 'Lebanon',
+                      contactPerson: '',
+                      paymentTerms: '30 Days Net',
+                      balanceUSD: 0,
+                      balanceLBP: 0,
+                    });
+                    setFormAgent(newSupplierName.trim());
+                    setIsAddSupplierModalOpen(false);
+                  }
+                }}
+                disabled={!newSupplierName.trim()}
+                className="px-5 py-2 text-sm font-bold text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50 transition-colors shadow-sm cursor-pointer"
+              >
+                Save Supplier
+              </button>
+            </div>
+          </div>
         </DesktopWindow>
       )}
 

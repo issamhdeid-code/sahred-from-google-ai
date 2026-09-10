@@ -227,8 +227,102 @@ export const PurchaseView: React.FC = () => {
   const [viewingPurchase, setViewingPurchase] = useState<PurchaseInvoice | null>(null);
 
   const [selectedSupplierId, setSelectedSupplierId] = useState(suppliers[0]?.id || '');
+  const [supplierSearchQuery, setSupplierSearchQuery] = useState('');
+  const [isSupplierDropdownOpen, setIsSupplierDropdownOpen] = useState(false);
+  const [supplierHighlightedIndex, setSupplierHighlightedIndex] = useState(0);
+  const supplierDropdownRef = useRef<HTMLDivElement>(null);
+  const supplierListContainerRef = useRef<HTMLDivElement>(null);
+  const supplierItemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const filteredSuppliers = useMemo(() => {
+    return suppliers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(supplierSearchQuery.toLowerCase()) ||
+        s.code.toLowerCase().includes(supplierSearchQuery.toLowerCase())
+    );
+  }, [suppliers, supplierSearchQuery]);
+
+  useEffect(() => {
+    setSupplierHighlightedIndex(0);
+  }, [supplierSearchQuery]);
+
+  useEffect(() => {
+    if (!isSupplierDropdownOpen) return;
+    const activeEl = supplierItemRefs.current[supplierHighlightedIndex];
+    const container = supplierListContainerRef.current;
+    if (!activeEl || !container) return;
+
+    const activeTop = activeEl.offsetTop;
+    const activeHeight = activeEl.offsetHeight;
+    const activeBottom = activeTop + activeHeight;
+    const containerScrollTop = container.scrollTop;
+    const containerHeight = container.clientHeight;
+
+    if (activeTop < containerScrollTop) {
+      container.scrollTop = activeTop;
+    } else if (activeBottom > containerScrollTop + containerHeight) {
+      container.scrollTop = activeBottom - containerHeight;
+    }
+  }, [supplierHighlightedIndex, isSupplierDropdownOpen]);
+
+  const handleSupplierKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!isSupplierDropdownOpen) {
+        setIsSupplierDropdownOpen(true);
+        setSupplierHighlightedIndex(0);
+      } else if (filteredSuppliers.length > 0) {
+        setSupplierHighlightedIndex((prev) =>
+          Math.min(prev + 1, filteredSuppliers.length - 1)
+        );
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (isSupplierDropdownOpen) {
+        setSupplierHighlightedIndex((prev) => Math.max(prev - 1, 0));
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (isSupplierDropdownOpen && filteredSuppliers[supplierHighlightedIndex]) {
+        const s = filteredSuppliers[supplierHighlightedIndex];
+        setSelectedSupplierId(s.id);
+        setSupplierSearchQuery(s.name);
+        setIsSupplierDropdownOpen(false);
+      }
+      setTimeout(() => invoiceDateRef.current?.focus(), 0);
+    } else if (e.key === 'Escape') {
+      setIsSupplierDropdownOpen(false);
+    }
+  };
+
+  const invoiceDateRef = useRef<HTMLInputElement>(null);
+  const paymentStatusRef = useRef<HTMLSelectElement>(null);
+  const currencyRef = useRef<HTMLSelectElement>(null);
+
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
   const [isPaid, setIsPaid] = useState(true);
+
+  useEffect(() => {
+    if (!isSupplierDropdownOpen) {
+      const sel = suppliers.find(s => s.id === selectedSupplierId);
+      if (sel) {
+        setSupplierSearchQuery(sel.name);
+      }
+    }
+  }, [selectedSupplierId, isSupplierDropdownOpen, suppliers]);
+  
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        supplierDropdownRef.current &&
+        !supplierDropdownRef.current.contains(e.target as Node)
+      ) {
+        setIsSupplierDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // New Purchase Items
   const [items, setItems] = useState<PurchaseItem[]>([]);
@@ -238,6 +332,8 @@ export const PurchaseView: React.FC = () => {
   const [itemCostUSD, setItemCostUSD] = useState('0');
   const [itemTotalInput, setItemTotalInput] = useState('0');
   const [isTotalFocused, setIsTotalFocused] = useState(false);
+  const [isPublicPriceFocused, setIsPublicPriceFocused] = useState(false);
+  const [isDiscountFocused, setIsDiscountFocused] = useState(false);
   const [itemDiscount, setItemDiscount] = useState('0');
   const [itemPublicPrice, setItemPublicPrice] = useState('0');
   const [itemBatch, setItemBatch] = useState('');
@@ -261,7 +357,9 @@ export const PurchaseView: React.FC = () => {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const unitInputRef = useRef<HTMLSelectElement | null>(null);
   const expiryInputRef = useRef<HTMLInputElement | null>(null);
+  const batchInputRef = useRef<HTMLInputElement | null>(null);
   const qtyInputRef = useRef<HTMLInputElement | null>(null);
+  const vatInputRef = useRef<HTMLSelectElement | null>(null);
   const costInputRef = useRef<HTMLInputElement | null>(null);
   const discountInputRef = useRef<HTMLInputElement | null>(null);
   const publicPriceInputRef = useRef<HTMLInputElement | null>(null);
@@ -501,11 +599,15 @@ export const PurchaseView: React.FC = () => {
       if (purchaseCurrency === 'LBP') {
         derivedPublicPrice = Math.round(derivedPublicPrice);
       } else {
-        derivedPublicPrice = Number(derivedPublicPrice.toFixed(2));
+        derivedPublicPrice = Math.round(derivedPublicPrice);
       }
     }
     
     setItemPublicPrice(derivedPublicPrice.toString());
+
+    if (autoFocusQty) {
+      setTimeout(() => unitInputRef.current?.focus(), 50);
+    }
   };
 
   useEffect(() => {
@@ -519,7 +621,7 @@ export const PurchaseView: React.FC = () => {
         calc += parsedCost * (vatRate / 100);
 
         if (purchaseCurrency === 'LBP') calc = Math.round(calc);
-        else calc = Number(calc.toFixed(2));
+        else calc = Math.round(calc);
         setItemPublicPrice(calc.toString());
       }
     }
@@ -530,6 +632,20 @@ export const PurchaseView: React.FC = () => {
     // triggers this effect, which sees '' and instantly repopulates it with the calculation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemCostUSD, itemDiscount, purchaseCurrency, itemVATChoice, selectedProduct, settings]);
+
+  useEffect(() => {
+    if (isPublicPriceFocused || isDiscountFocused) {
+      const pubPrice = parseFloat(itemPublicPrice) || 0;
+      const discount = parseFloat(itemDiscount) || 0;
+      
+      let newCost = pubPrice - (pubPrice * (discount / 100));
+      
+      if (purchaseCurrency === 'LBP') newCost = Math.round(newCost);
+      else newCost = Number(newCost.toFixed(2));
+      
+      setItemCostUSD(newCost.toString());
+    }
+  }, [itemPublicPrice, itemDiscount, isPublicPriceFocused, isDiscountFocused, purchaseCurrency]);
 
   useEffect(() => {
     if (!isTotalFocused) {
@@ -1119,14 +1235,71 @@ export const PurchaseView: React.FC = () => {
         >
           <form onSubmit={handleSavePurchase} className="p-5 space-y-4 text-xs flex-1 flex flex-col justify-between overflow-y-auto min-h-0">
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div>
+              <div ref={supplierDropdownRef} className="relative">
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Select Supplier / Agent
                 </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={supplierSearchQuery}
+                    onChange={(e) => {
+                      setSupplierSearchQuery(e.target.value);
+                      setIsSupplierDropdownOpen(true);
+                    }}
+                    onFocus={() => {
+                      setIsSupplierDropdownOpen(true);
+                      const sel = suppliers.find(s => s.id === selectedSupplierId);
+                      if (sel && supplierSearchQuery === sel.name) {
+                        setSupplierSearchQuery('');
+                      }
+                    }}
+                    onKeyDown={handleSupplierKeyDown}
+                    placeholder="Type to search supplier..."
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                  <ChevronDown className="absolute right-3 top-3 h-4 w-4 text-slate-400 pointer-events-none" />
+                </div>
+                
+                {isSupplierDropdownOpen && (
+                  <div 
+                    ref={supplierListContainerRef}
+                    className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl max-h-48 overflow-y-auto"
+                  >
+                    {filteredSuppliers.map((s, index) => (
+                        <div
+                          key={s.id}
+                          ref={(el) => { supplierItemRefs.current[index] = el; }}
+                          className={`px-3 py-2 cursor-pointer text-sm flex items-center justify-between ${
+                            supplierHighlightedIndex === index
+                              ? 'bg-teal-50 dark:bg-teal-900/40 text-teal-800 dark:text-teal-200 font-semibold'
+                              : 'hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200'
+                          } ${selectedSupplierId === s.id && supplierHighlightedIndex !== index ? 'font-semibold text-teal-700 dark:text-teal-400 bg-teal-50/50 dark:bg-teal-900/20' : ''}`}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setSelectedSupplierId(s.id);
+                            setSupplierSearchQuery(s.name);
+                            setIsSupplierDropdownOpen(false);
+                          }}
+                        >
+                          <span>{s.name}</span>
+                          {!s.code.toUpperCase().startsWith('MOPH-') && (
+                            <span className="text-[10px] text-slate-400 font-mono">{s.code}</span>
+                          )}
+                        </div>
+                    ))}
+                    {filteredSuppliers.length === 0 && (
+                      <div className="px-3 py-4 text-center text-slate-400 text-xs">No suppliers found</div>
+                    )}
+                  </div>
+                )}
+                {/* Fallback to keep the value in DOM */}
                 <select
                   value={selectedSupplierId}
                   onChange={(e) => setSelectedSupplierId(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-hidden="true"
                 >
                   {suppliers.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -1141,9 +1314,16 @@ export const PurchaseView: React.FC = () => {
                   Invoice Date
                 </label>
                 <input
+                  ref={invoiceDateRef}
                   type="date"
                   value={invoiceDate}
                   onChange={(e) => setInvoiceDate(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      paymentStatusRef.current?.focus();
+                    }
+                  }}
                   required
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                 />
@@ -1154,8 +1334,15 @@ export const PurchaseView: React.FC = () => {
                   Payment Status
                 </label>
                 <select
+                  ref={paymentStatusRef}
                   value={isPaid ? 'paid' : 'debt'}
                   onChange={(e) => setIsPaid(e.target.value === 'paid')}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      currencyRef.current?.focus();
+                    }
+                  }}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                 >
                   <option value="paid">Paid (Cash / Bank)</option>
@@ -1168,6 +1355,7 @@ export const PurchaseView: React.FC = () => {
                   Currency
                 </label>
                 <select
+                  ref={currencyRef}
                   value={purchaseCurrency}
                   onChange={(e) => {
                     const newCurrency = e.target.value as 'USD' | 'LBP';
@@ -1176,6 +1364,12 @@ export const PurchaseView: React.FC = () => {
                     if (selectedProduct) {
                       const defaultCost = selectedProduct.costPriceUSD != null ? selectedProduct.costPriceUSD : 0;
                       setItemCostUSD(newCurrency === 'USD' ? defaultCost.toString() : Math.round(defaultCost * exchangeRate).toString());
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      searchInputRef.current?.focus();
                     }
                   }}
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-800 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -1220,8 +1414,8 @@ export const PurchaseView: React.FC = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-10 gap-3">
-                <div className="sm:col-span-2 relative" ref={searchDropdownRef}>
+              <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-12 gap-3">
+                <div className="sm:col-span-3 relative" ref={searchDropdownRef}>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide">
                       Medication / Item
@@ -1455,11 +1649,32 @@ export const PurchaseView: React.FC = () => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
                         handleExpiryBlur();
+                        batchInputRef.current?.focus();
+                        batchInputRef.current?.select();
+                      }
+                    }}
+                    placeholder="MM/YY"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Batch #</label>
+                  <input
+                    ref={batchInputRef}
+                    id="purchase-item-batch"
+                    type="text"
+                    value={itemBatch}
+                    onChange={(e) => setItemBatch(e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
                         qtyInputRef.current?.focus();
                         qtyInputRef.current?.select();
                       }
                     }}
-                    placeholder="MM/YY"
+                    placeholder="BT-9900"
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 font-mono"
                   />
                 </div>
@@ -1476,8 +1691,7 @@ export const PurchaseView: React.FC = () => {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        costInputRef.current?.focus();
-                        costInputRef.current?.select();
+                        vatInputRef.current?.focus();
                       }
                     }}
                     placeholder="0"
@@ -1489,8 +1703,16 @@ export const PurchaseView: React.FC = () => {
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">VAT</label>
                   <div className="relative">
                     <select
+                      ref={vatInputRef}
                       value={itemVATChoice}
                       onChange={(e) => setItemVATChoice(e.target.value as 'setting' | 'none')}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          publicPriceInputRef.current?.focus();
+                          publicPriceInputRef.current?.select();
+                        }
+                      }}
                       className="w-full appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-8 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-hidden focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                     >
                       <option value="setting">
@@ -1506,15 +1728,18 @@ export const PurchaseView: React.FC = () => {
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                    Unit Cost {purchaseCurrency === 'USD' ? 'USD ($)' : 'LBP (ل.ل)'}
+                    Public Price
                   </label>
                   <input
-                    ref={costInputRef}
-                    id="purchase-item-cost"
+                    ref={publicPriceInputRef}
                     type="text"
-                    value={formatWithCommas(itemCostUSD)}
-                    onChange={(e) => setItemCostUSD(e.target.value.replace(/,/g, ''))}
-                    onFocus={(e) => e.target.select()}
+                    value={formatWithCommas(itemPublicPrice.split('.')[0])}
+                    onChange={(e) => setItemPublicPrice(e.target.value.replace(/,/g, '').split('.')[0])}
+                    onFocus={(e) => {
+                      setIsPublicPriceFocused(true);
+                      e.target.select();
+                    }}
+                    onBlur={() => setIsPublicPriceFocused(false)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
@@ -1534,12 +1759,16 @@ export const PurchaseView: React.FC = () => {
                     type="text"
                     value={formatWithCommas(itemDiscount)}
                     onChange={(e) => setItemDiscount(e.target.value.replace(/,/g, ''))}
-                    onFocus={(e) => e.target.select()}
+                    onFocus={(e) => {
+                      setIsDiscountFocused(true);
+                      e.target.select();
+                    }}
+                    onBlur={() => setIsDiscountFocused(false)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        publicPriceInputRef.current?.focus();
-                        publicPriceInputRef.current?.select();
+                        costInputRef.current?.focus();
+                        costInputRef.current?.select();
                       }
                     }}
                     placeholder="0"
@@ -1549,13 +1778,14 @@ export const PurchaseView: React.FC = () => {
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                    Public Price
+                    Unit Cost {purchaseCurrency === 'USD' ? 'USD ($)' : 'LBP (ل.ل)'}
                   </label>
                   <input
-                    ref={publicPriceInputRef}
+                    ref={costInputRef}
+                    id="purchase-item-cost"
                     type="text"
-                    value={formatWithCommas(itemPublicPrice)}
-                    onChange={(e) => setItemPublicPrice(e.target.value.replace(/,/g, ''))}
+                    value={formatWithCommas(itemCostUSD)}
+                    onChange={(e) => setItemCostUSD(e.target.value.replace(/,/g, ''))}
                     onFocus={(e) => e.target.select()}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -1640,20 +1870,6 @@ export const PurchaseView: React.FC = () => {
                         Agent: <strong className="text-slate-700 dark:text-slate-200">{selectedProduct.agent}</strong>
                       </span>
                     )}
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5">
-                      <label className="text-[10px] font-bold text-slate-500">Batch #:</label>
-                      <input
-                        id="purchase-item-batch"
-                        type="text"
-                        value={itemBatch}
-                        onChange={(e) => setItemBatch(e.target.value)}
-                        placeholder="BT-9900"
-                        className="w-24 rounded border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 font-mono"
-                      />
-                    </div>
                   </div>
                 </div>
               )}

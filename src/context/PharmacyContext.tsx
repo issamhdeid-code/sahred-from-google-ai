@@ -136,7 +136,9 @@ interface PharmacyContextType {
   deletePurchase: (purchaseId: string) => { success: boolean; error?: string };
   suppliers: Supplier[];
   addSupplier: (supplier: Omit<Supplier, 'id'>) => void;
+  bulkAddSuppliers: (suppliersData: Omit<Supplier, 'id'>[]) => void;
   updateSupplier: (id: string, updates: Partial<Supplier>) => void;
+  deleteSupplier: (id: string) => { success: boolean; error?: string };
 
   // Customers
   customers: Customer[];
@@ -181,6 +183,7 @@ interface PharmacyContextType {
   exportBackup: () => Promise<string>;
   restoreBackup: (jsonContent: string) => Promise<boolean>;
   resetDemoData: () => void;
+  clearAllData: () => void;
 }
 
 const PharmacyContext = createContext<PharmacyContextType | undefined>(undefined);
@@ -473,6 +476,14 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (!remoteSup) return;
           setSuppliers(prev => {
             const next = upsertById(prev, remoteSup);
+            OfflineStorage.saveSuppliers(next);
+            return next;
+          });
+        } else if (payload.type === 'SUPPLIER_DELETED') {
+          const deletedId = payload.data?.id;
+          setSuppliers(prev => {
+            if (!deletedId || !prev.some(s => s.id === deletedId)) return prev;
+            const next = prev.filter(s => s.id !== deletedId);
             OfflineStorage.saveSuppliers(next);
             return next;
           });
@@ -1517,7 +1528,12 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       const agent = colAgent && row[colAgent] ? row[colAgent].replace(/['"]/g, '').trim() : '';
       const rawMarginStr = colMargin && row[colMargin] ? row[colMargin].replace(/[^\d.]/g, '') : '0';
-      const margin = parseFloat(rawMarginStr) || 0;
+      let margin = parseFloat(rawMarginStr) || 0;
+      
+      // Override specific MOPH margin logic
+      if (margin === 23.08) {
+        margin = 22.25;
+      }
 
       const costPriceUSD = priceUSD > 0 ? Number((priceUSD * (1 - margin / 100)).toFixed(2)) : 0;
 
@@ -2638,13 +2654,34 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const addSupplier = (supplierData: Omit<Supplier, 'id'>) => {
     const newSup: Supplier = {
       ...supplierData,
-      id: `sup-${Date.now()}`,
+      id: `sup-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     };
-    const updated = [...suppliers, newSup];
-    setSuppliers(updated);
-    OfflineStorage.saveSuppliers(updated);
+    setSuppliers(prev => {
+      const updated = [...prev, newSup];
+      OfflineStorage.saveSuppliers(updated);
+      return updated;
+    });
     try { syncEngine.broadcast('SUPPLIER_UPSERT', newSup); } catch (e) {}
     addNotification('Supplier Added', `Registered supplier: ${newSup.name}`, 'system', 'success');
+  };
+
+  const bulkAddSuppliers = (suppliersData: Omit<Supplier, 'id'>[]) => {
+    if (suppliersData.length === 0) return;
+    
+    const newSups: Supplier[] = suppliersData.map((data, index) => ({
+      ...data,
+      id: `sup-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
+    }));
+
+    setSuppliers(prev => {
+      const updated = [...prev, ...newSups];
+      OfflineStorage.saveSuppliers(updated);
+      return updated;
+    });
+
+    try {
+      newSups.forEach(sup => syncEngine.broadcast('SUPPLIER_UPSERT', sup));
+    } catch (e) {}
   };
 
   const updateSupplier = (id: string, updates: Partial<Supplier>) => {
@@ -2655,6 +2692,23 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const updatedSup = updated.find(s => s.id === id);
       if (updatedSup) syncEngine.broadcast('SUPPLIER_UPSERT', updatedSup);
     } catch (e) {}
+  };
+
+  const deleteSupplier = (id: string) => {
+    const hasPurchases = purchases.some(p => p.supplierId === id);
+    if (hasPurchases) {
+      addNotification('Error', 'Cannot delete a supplier with existing purchase records.', 'system', 'error');
+      return { success: false, error: 'Cannot delete a supplier with existing purchase records.' };
+    }
+    const supToDelete = suppliers.find(s => s.id === id);
+    if (!supToDelete) return { success: false, error: 'Supplier not found' };
+
+    const updated = suppliers.filter(s => s.id !== id);
+    setSuppliers(updated);
+    OfflineStorage.saveSuppliers(updated);
+    try { syncEngine.broadcast('SUPPLIER_DELETED', { id }); } catch (e) {}
+    addNotification('Supplier Deleted', `Removed supplier: ${supToDelete.name}`, 'system', 'success');
+    return { success: true };
   };
 
   // Customers CRUD
@@ -2765,6 +2819,17 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addNotification('Demo Reset', 'Reset all modules to initial Lebanese demo records.', 'system', 'info');
   };
 
+  const clearAllData = () => {
+    OfflineStorage.clearAllData();
+    setProducts([]);
+    setSuppliers([]);
+    setCustomers([]);
+    setSales([]);
+    setPurchases([]);
+    setLogs([]);
+    addNotification('Data Cleared', 'All inventory, sales, purchases, customers, and suppliers have been deleted.', 'system', 'warning');
+  };
+
   const contextValue = useMemo(() => ({
     currentUser,
     login,
@@ -2811,7 +2876,9 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     deletePurchase,
     suppliers,
     addSupplier,
+    bulkAddSuppliers,
     updateSupplier,
+    deleteSupplier,
 
     customers,
     addCustomer,
@@ -2838,6 +2905,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     exportBackup,
     restoreBackup,
     resetDemoData,
+    clearAllData,
   }), [
     currentUser, users, activeTab, exchangeRate, products, sales, purchases, suppliers, customers,
     settings, notifications, syncStatus, activeSessions, logs, isSearchingScientifics,
@@ -2847,9 +2915,9 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     updateDrugPriceByCode, clearPriceChangeIndicators, importProductsFromCSV,
     searchScientificDataOnline, enrichProductWithOnlineScientifics, enrichAllProductsOnline, standardizeAllScientifics,
     recordSale, updateSale, deleteSale, recordPurchase, updatePurchase, deletePurchase,
-    addSupplier, updateSupplier, addCustomer, updateCustomer, updateSettings, toggleDarkMode,
+    addSupplier, bulkAddSuppliers, updateSupplier, deleteSupplier, addCustomer, updateCustomer, updateSettings, toggleDarkMode,
     unreadCount, dismissNotification, markAllNotificationsRead, addNotification,
-    connectSyncEngine, addLog, clearLogs, exportLogs, exportBackup, restoreBackup, resetDemoData,
+    connectSyncEngine, addLog, clearLogs, exportLogs, exportBackup, restoreBackup, resetDemoData, clearAllData,
   ]);
 
   return (

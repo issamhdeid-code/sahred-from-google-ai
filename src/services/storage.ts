@@ -1457,4 +1457,15 @@ export class OfflineStorage {
     this.saveConflicts([]);
     this.saveLogs(INITIAL_LOGS);
   }
+
+  static clearAllData(): void {
+    // We keep settings and users so the current session remains valid
+    this.saveProducts([]);
+    this.saveSuppliers([]);
+    this.saveCustomers([]);
+    this.saveSales([]);
+    this.savePurchases([]);
+    this.saveConflicts([]);
+    this.saveLogs([]);
+  }
 }

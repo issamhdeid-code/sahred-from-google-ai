@@ -290,6 +290,12 @@ async function downloadPriceListXls(): Promise<MOPHPriceListRow[]> {
   for (const r of rawRows) {
     const code = parseXlsPriceNumber(r['Code']);
     if (code === null) continue;
+    
+    let rawMargin = parseXlsPriceNumber(r['Pharmacist Margin']);
+    if (rawMargin === 23.08) {
+      rawMargin = 22.25;
+    }
+
     rows.push({
       code,
       registrationNumber: stripTrailingComma(String(r['Registration number'] ?? '')),
@@ -301,7 +307,7 @@ async function downloadPriceListXls(): Promise<MOPHPriceListRow[]> {
       manufacturer: stripTrailingComma(String(r['Manufacturer'] ?? '')),
       country: stripTrailingComma(String(r['Country'] ?? '')),
       publicPriceLBP: parseXlsPriceNumber(r['Public Price LL']),
-      pharmacistMargin: parseXlsPriceNumber(r['Pharmacist Margin']),
+      pharmacistMargin: rawMargin,
       stratum: stripTrailingComma(String(r['Stratum'] ?? '')),
     });
   }
